@@ -1,3 +1,5 @@
+use gpui::actions;
+
 actions!(
     slides,
     [
