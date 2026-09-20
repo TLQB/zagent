@@ -38,4 +38,4 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: cargo check
-        run: cargo check -p glm -p language_models -p zai_proxy_sidecar -p agent --all-targets
+        run: cargo check -p glm -p language_models -p zai_proxy_sidecar -p agent -p zed_actions --all-targets
