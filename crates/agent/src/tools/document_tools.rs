@@ -8,7 +8,8 @@ use crate::tools::spreadsheet_tools::resolve_workspace_path;
 use crate::{AgentTool, ToolCallEventStream, ToolInput};
 use agent_client_protocol::schema::v1 as acp;
 use anyhow::{Context as _, Result};
-use gpui::{App, Entity, SharedString, Task};
+use docx_rs::BuildXML as _;
+use gpui::{App, AppContext as _, Entity, SharedString, Task};
 use language_model::LanguageModelToolResultContent;
 use project::Project;
 use schemars::JsonSchema;
@@ -286,7 +287,7 @@ fn write_docx_impl(path: &PathBuf, input: &WriteDocxToolInput) -> Result<usize> 
     let mut count = 0usize;
     if let Some(title) = &input.title {
         docx = docx.add_paragraph(
-            docx_rs::Paragraph::new().add_run(docx_rs::Run::new().text(title.as_str())),
+            docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text(title.as_str())),
         );
         count += 1;
     }
@@ -302,13 +303,12 @@ fn write_docx_impl(path: &PathBuf, input: &WriteDocxToolInput) -> Result<usize> 
         if let Some(style) = style {
             built = built.style(style);
         }
-        docx = docx.add_paragraph(built.add_run(docx_rs::Run::new().text(text)));
+        docx = docx.add_paragraph(built.add_run(docx_rs::Run::new().add_text(text)));
         count += 1;
     }
 
-    let mut buffer = std::io::Cursor::new(Vec::new());
-    docx_rs::write_docx(&mut buffer, docx).context("serialize docx")?;
-    std::fs::write(&path, buffer.into_inner()).with_context(|| format!("write {:?}", path))?;
+    let file = std::fs::File::create(&path).with_context(|| format!("write {:?}", path))?;
+    docx.build().pack(file).context("serialize docx")?;
     Ok(count)
 }
 
