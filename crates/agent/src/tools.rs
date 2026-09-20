@@ -13,6 +13,7 @@ mod evals;
 mod fetch_tool;
 mod find_path_tool;
 mod find_references_tool;
+mod generate_image_tool;
 mod get_code_actions_tool;
 mod go_to_definition_tool;
 mod grep_tool;
@@ -94,6 +95,7 @@ pub use skill_tool::*;
 pub use spawn_agent_tool::*;
 pub use symbol_locator::*;
 
+pub use generate_image_tool::*;
 pub use terminal_tool::*;
 pub use tool_permissions::*;
 pub use web_search_tool::*;
@@ -208,6 +210,7 @@ tools! {
     FetchTool,
     FindPathTool,
     FindReferencesTool,
+    GenerateImageTool,
     GetCodeActionsTool,
     GoToDefinitionTool,
     GrepTool,
