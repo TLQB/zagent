@@ -1,0 +1,54 @@
+# Auto-release: waits for both build workflows of the same commit to succeed,
+# then tags the commit and publishes a GitHub release with both artifacts.
+name: Create release
+
+on:
+  workflow_run:
+    workflows: ["Build Linux", "Build Windows"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for both builds, then tag + release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          head_sha=$(jq -r .workflow_run.head_sha < "$GITHUB_EVENT_PATH")
+          repo="$GITHUB_REPOSITORY"
+          echo "watching builds of $head_sha"
+          while true; do
+            l=$(gh run list -R "$repo" --workflow=build-linux.yml --commit "$head_sha" --limit 1 --json status,conclusion -q '.[0] | .status + ":" + (.conclusion // "")' 2>/dev/null || echo none)
+            w=$(gh run list -R "$repo" --workflow=build-windows.yml --commit "$head_sha" --limit 1 --json status,conclusion -q '.[0] | .status + ":" + (.conclusion // "")' 2>/dev/null || echo none)
+            echo "$(date -u +%H:%M) linux=$l windows=$w"
+            case "$l:$w" in
+              completed:success:completed:success) break ;;
+              completed:*:completed:*) echo "a build failed - no release"; exit 0 ;;
+            esac
+            sleep 300
+          done
+          linux_run=$(gh run list -R "$repo" --workflow=build-linux.yml --commit "$head_sha" --limit 1 --json databaseId -q '.[0].databaseId')
+          win_run=$(gh run list -R "$repo" --workflow=build-windows.yml --commit "$head_sha" --limit 1 --json databaseId -q '.[0].databaseId')
+          rm -rf dist && mkdir -p dist/linux dist/win
+          gh run download "$linux_run" -R "$repo" -D dist/linux
+          gh run download "$win_run" -R "$repo" -D dist/win
+          base="v$(date -u +%Y.%m.%d)"
+          final="$base"; n=1
+          while git ls-remote --tags origin "refs/tags/$final" | grep -q .; do n=$((n+1)); final="$base.$n"; done
+          git config user.name zagent-bot
+          git config user.email bot@zagent.local
+          git tag "$final" "$head_sha" || true
+          git push origin "refs/tags/$final" || true
+          if gh release view "$final" -R "$repo" >/dev/null 2>&1; then echo "release exists"; exit 0; fi
+          gh release create "$final" -R "$repo" --target "$head_sha" \
+            --title "zagent $final" \
+            --notes "Automated build of $head_sha. Includes: GLM vision (image input), Slides composer mode (native editable PPTX), generate_image tool, /v1/images/generations sidecar endpoint." \
+            dist/linux/* dist/win/* \
+            || gh release upload "$final" -R "$repo" dist/linux/* dist/win/*

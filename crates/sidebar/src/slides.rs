@@ -22,6 +22,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::pptx;
 use anyhow::Context as _;
 use futures::{AsyncBufReadExt, StreamExt, io::BufReader};
 use gpui::AppContext as _;

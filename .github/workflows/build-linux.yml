@@ -6,7 +6,26 @@ on:
   workflow_dispatch:
 
 jobs:
+  check:
+    name: compile gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
+          sh /tmp/rustup.sh -y --no-modify-path --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang lld libasound2-dev libfontconfig-dev libgit2-dev libglib2.0-dev libssl-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev libsqlite3-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check
+        run: cargo check -p zed_actions -p sidebar -p agent_ui -p agent -p glm -p language_models -p zai_proxy_sidecar
   build-linux:
+    needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
