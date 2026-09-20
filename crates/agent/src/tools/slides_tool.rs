@@ -142,11 +142,7 @@ impl AgentTool for GenerateSlidesTool {
                 acp::ToolCallUpdateFields::new().title("Requesting deck from the model…"),
             );
 
-            let out_dir = cx
-                .update(|cx| first_worktree_dir(&project, cx))
-                .map_err(|e| GenerateSlidesToolOutput::Error {
-                    error: e.to_string(),
-                })?;
+            let out_dir = cx.update(|cx| first_worktree_dir(&project, cx));
 
             let deck = collect_deck(
                 http_client.clone(),

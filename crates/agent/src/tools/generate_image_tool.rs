@@ -198,11 +198,7 @@ impl AgentTool for GenerateImageTool {
 
             event_stream.update_fields(acp::ToolCallUpdateFields::new().title("Saving image…"));
 
-            let out_dir = cx
-                .update(|cx| first_worktree_dir(&project, cx))
-                .map_err(|e| GenerateImageToolOutput::Error {
-                    error: e.to_string(),
-                })?;
+            let out_dir = cx.update(|cx| first_worktree_dir(&project, cx));
             let images_dir = out_dir.join("zagent-images");
             std::fs::create_dir_all(&images_dir).map_err(|e| GenerateImageToolOutput::Error {
                 error: e.to_string(),
