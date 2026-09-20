@@ -316,7 +316,7 @@ pub fn generate_slides(
         std::fs::write(&pptx_path, &pptx_bytes)
             .with_context(|| format!("write {:?}", pptx_path))?;
 
-        Ok((html_path, pptx_path, deck.slides.len()))
+        Ok::<_, anyhow::Error>((html_path, pptx_path, deck.slides.len()))
     });
 
     let pump_id = notification_id.clone();

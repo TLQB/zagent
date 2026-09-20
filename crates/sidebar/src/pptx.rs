@@ -136,7 +136,7 @@ pub fn build(slides: &[Slide], doc_title: &str) -> Vec<u8> {
         ));
         parts.push((
             format!("ppt/slides/_rels/slide{n}.xml.rels"),
-            r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            br##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>"##
                 .to_vec(),
         ));
