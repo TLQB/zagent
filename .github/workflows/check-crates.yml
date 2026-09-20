@@ -31,6 +31,18 @@ jobs:
           sh /tmp/rustup-init.sh -y --no-modify-path --profile minimal --default-toolchain none
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
+      - name: Install system dependencies
+        # gpui and its sys crates (glib-sys, alsa, fontconfig, ...) need the
+        # same native dev packages script/linux installs for the release
+        # build; the bare ubuntu-latest image ships none of them.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake clang lld \
+            libasound2-dev libfontconfig-dev libgit2-dev libglib2.0-dev \
+            libssl-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev \
+            libzstd-dev libsqlite3-dev
+
       - name: Cache cargo
         # Reuses ~/.cargo and ./target between runs, so a push that only
         # touches crates/glm re-checks glm + dependents instead of the whole
