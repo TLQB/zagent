@@ -287,7 +287,9 @@ pub fn generate_slides(
     let client: Arc<dyn HttpClient> = workspace.app_state().client.http_client();
     let (progress_tx, progress_rx) = async_channel::unbounded::<String>();
 
+    let pipeline_tx = progress_tx.clone();
     let pipeline = cx.background_spawn(async move {
+        let progress_tx = pipeline_tx;
         progress_tx
             .send("Requesting deck from the model…".to_string())
             .await
