@@ -996,4 +996,3 @@ pub mod git_panel {
         ]
     );
 }
-pub mod slides;

@@ -1,12 +1,15 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::tools::slides_tool::first_worktree_dir;
 use crate::{AgentTool, ToolCallEventStream, ToolInput};
 use agent_client_protocol::schema::v1 as acp;
 use anyhow::Result;
 use futures::{AsyncReadExt, FutureExt as _};
-use gpui::{App, Task};
+use gpui::{App, Entity, Task};
 use http_client::{AsyncBody, HttpClient, HttpClientWithUrl, http};
 use language_model::LanguageModelToolResultContent;
+use project::Project;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ui::prelude::*;
@@ -34,6 +37,8 @@ pub struct GenerateImageToolInput {
 pub struct GeneratedImage {
     /// URL of the generated image (signed; expires after about a week).
     url: String,
+    /// Local copy saved into the project's `zagent-images/` directory.
+    local_path: String,
     ratio: String,
     resolution: String,
 }
@@ -49,8 +54,10 @@ impl From<GenerateImageToolOutput> for LanguageModelToolResultContent {
     fn from(value: GenerateImageToolOutput) -> Self {
         match value {
             GenerateImageToolOutput::Success(image) => format!(
-                "Generated image ({} {}): {}",
-                image.ratio, image.resolution, image.url
+                "Generated image ({} {}).
+Saved to: {}
+URL: {}",
+                image.ratio, image.resolution, image.local_path, image.url
             )
             .into(),
             GenerateImageToolOutput::Error { error } => error.into(),
@@ -60,11 +67,15 @@ impl From<GenerateImageToolOutput> for LanguageModelToolResultContent {
 
 pub struct GenerateImageTool {
     http_client: Arc<HttpClientWithUrl>,
+    project: Entity<Project>,
 }
 
 impl GenerateImageTool {
-    pub fn new(http_client: Arc<HttpClientWithUrl>) -> Self {
-        Self { http_client }
+    pub fn new(http_client: Arc<HttpClientWithUrl>, project: Entity<Project>) -> Self {
+        Self {
+            http_client,
+            project,
+        }
     }
 }
 
@@ -93,6 +104,7 @@ impl AgentTool for GenerateImageTool {
         cx: &mut App,
     ) -> Task<Result<Self::Output, Self::Output>> {
         let http_client = self.http_client.clone();
+        let project = self.project.clone();
         cx.spawn(async move |cx| {
             let input = input
                 .recv()
@@ -184,10 +196,68 @@ impl AgentTool for GenerateImageTool {
                 .unwrap_or_default()
                 .to_string();
 
+            event_stream.update_fields(acp::ToolCallUpdateFields::new().title("Saving image…"));
+
+            let out_dir = cx
+                .update(|cx| first_worktree_dir(&project, cx))
+                .map_err(|e| GenerateImageToolOutput::Error {
+                    error: e.to_string(),
+                })?;
+            let images_dir = out_dir.join("zagent-images");
+            std::fs::create_dir_all(&images_dir).map_err(|e| GenerateImageToolOutput::Error {
+                error: e.to_string(),
+            })?;
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| GenerateImageToolOutput::Error {
+                    error: e.to_string(),
+                })?
+                .as_millis();
+            let image_path = images_dir.join(format!("image-{stamp}.png"));
+
+            let get_request = http::Request::builder()
+                .method(http::Method::GET)
+                .uri(url.as_str())
+                .body(AsyncBody::default())
+                .map_err(|e| GenerateImageToolOutput::Error {
+                    error: e.to_string(),
+                })?;
+            let mut image_response = futures::select! {
+                result = http_client.send(get_request).fuse() => result
+                    .map_err(|e| GenerateImageToolOutput::Error { error: e.to_string() })?,
+                _ = event_stream.cancelled_by_user().fuse() => {
+                    return Err(GenerateImageToolOutput::Error {
+                        error: "Image download cancelled by user".to_string(),
+                    });
+                }
+            };
+            let mut image_bytes = Vec::new();
+            image_response
+                .body_mut()
+                .read_to_end(&mut image_bytes)
+                .await
+                .map_err(|e| GenerateImageToolOutput::Error {
+                    error: e.to_string(),
+                })?;
+            if !image_response.status().is_success() {
+                return Err(GenerateImageToolOutput::Error {
+                    error: format!(
+                        "downloading the generated image failed: {}",
+                        image_response.status()
+                    ),
+                });
+            }
+            std::fs::write(&image_path, &image_bytes).map_err(|e| {
+                GenerateImageToolOutput::Error {
+                    error: e.to_string(),
+                }
+            })?;
+
             event_stream.update_fields(acp::ToolCallUpdateFields::new().title("Image generated"));
 
             Ok(GenerateImageToolOutput::Success(GeneratedImage {
                 url,
+                local_path: image_path.display().to_string(),
                 ratio,
                 resolution,
             }))

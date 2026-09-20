@@ -1,6 +1,3 @@
-mod pptx;
-mod slides;
-pub use slides::generate_slides;
 mod thread_switcher;
 
 use acp_thread::ThreadStatus;

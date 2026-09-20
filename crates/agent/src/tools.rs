@@ -23,6 +23,8 @@ mod move_path_tool;
 mod read_file_tool;
 mod rename_tool;
 mod skill_tool;
+mod slides_pptx;
+mod slides_tool;
 mod spawn_agent_tool;
 mod symbol_locator;
 mod terminal_tool;
@@ -96,6 +98,7 @@ pub use spawn_agent_tool::*;
 pub use symbol_locator::*;
 
 pub use generate_image_tool::*;
+pub use slides_tool::*;
 pub use terminal_tool::*;
 pub use tool_permissions::*;
 pub use web_search_tool::*;
@@ -211,6 +214,7 @@ tools! {
     FindPathTool,
     FindReferencesTool,
     GenerateImageTool,
+    GenerateSlidesTool,
     GetCodeActionsTool,
     GoToDefinitionTool,
     GrepTool,

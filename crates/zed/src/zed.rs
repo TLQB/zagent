@@ -1430,7 +1430,6 @@ fn register_actions(
     }
 
     workspace.register_action(sidebar::dump_workspace_info);
-    workspace.register_action(sidebar::generate_slides);
 
     #[cfg(debug_assertions)]
     workspace.register_action(|workspace, _: &ShowWorkspaceError, _, cx| {

@@ -1496,21 +1496,6 @@ impl ThreadView {
             return;
         }
 
-        // Slides mode: the profile turns the composer into a deck generator —
-        // the message text is the topic, no agent round-trip happens. Only
-        // the native agent carries profiles; external ACP agents never match.
-        let slides_mode = self.as_native_thread(cx).is_some_and(|native_thread| {
-            native_thread.read(cx).profile().as_str() == agent_settings::builtin_profiles::SLIDES
-        });
-        if slides_mode {
-            let topic = message_editor.read(cx).text(cx);
-            if !topic.trim().is_empty() {
-                message_editor.update(cx, |editor, cx| editor.clear(window, cx));
-                window.dispatch_action(
-                    Box::new(zed_actions::slides::GenerateSlides { topic: Some(topic) }),
-                    cx,
-                );
-            }
             cx.notify();
             return;
         }
