@@ -6,6 +6,7 @@ mod create_directory_tool;
 mod create_thread_tool;
 mod delete_path_tool;
 mod diagnostics_tool;
+mod document_tools;
 mod edit_file_tool;
 mod edit_session;
 #[cfg(all(test, feature = "unit-eval"))]
@@ -26,6 +27,7 @@ mod skill_tool;
 mod slides_pptx;
 mod slides_tool;
 mod spawn_agent_tool;
+mod spreadsheet_tools;
 mod symbol_locator;
 mod terminal_tool;
 mod tool_permissions;
@@ -97,8 +99,10 @@ pub use skill_tool::*;
 pub use spawn_agent_tool::*;
 pub use symbol_locator::*;
 
+pub use document_tools::*;
 pub use generate_image_tool::*;
 pub use slides_tool::*;
+pub use spreadsheet_tools::*;
 pub use terminal_tool::*;
 pub use tool_permissions::*;
 pub use web_search_tool::*;
@@ -210,6 +214,7 @@ tools! {
     DeletePathTool,
     DiagnosticsTool,
     EditFileTool,
+    EditSpreadsheetTool,
     FetchTool,
     FindPathTool,
     FindReferencesTool,
@@ -221,12 +226,16 @@ tools! {
     ListAgentsAndModelsTool,
     ListDirectoryTool,
     MovePathTool,
+    ReadDocxTool,
     ReadFileTool,
+    ReadPdfTool,
+    ReadSpreadsheetTool,
     RenameTool,
     SkillTool,
     SpawnAgentTool,
     TerminalTool,
     WebSearchTool,
+    WriteDocxTool,
     WriteFileTool,
 }
 
