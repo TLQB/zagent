@@ -1496,10 +1496,6 @@ impl ThreadView {
             return;
         }
 
-            cx.notify();
-            return;
-        }
-
         if is_generating {
             cx.emit(AcpThreadViewEvent::Interacted);
             self.queue_message(message_editor, window, cx);
