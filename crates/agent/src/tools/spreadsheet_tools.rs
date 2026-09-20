@@ -11,7 +11,7 @@ use crate::{AgentTool, ToolCallEventStream, ToolInput};
 use agent_client_protocol::schema::v1 as acp;
 use anyhow::{Context as _, Result, bail};
 use calamine::{Data, Reader, open_workbook_auto};
-use gpui::{App, Entity, SharedString, Task};
+use gpui::{App, AppContext as _, Entity, SharedString, Task};
 use language_model::LanguageModelToolResultContent;
 use project::Project;
 use schemars::JsonSchema;
@@ -100,7 +100,7 @@ fn format_data(data: &Data) -> String {
         Data::DateTime(value) => value
             .as_datetime()
             .map(|datetime| datetime.to_string())
-            .unwrap_or_else(|_| value.as_f64().to_string()),
+            .unwrap_or_else(|| value.as_f64().to_string()),
         Data::DateTimeIso(value) => value.clone(),
         Data::DurationIso(value) => value.clone(),
         Data::Error(value) => format!("#{value:?}"),
@@ -260,7 +260,8 @@ fn read_inner(path: &PathBuf, input: &ReadSpreadsheetToolInput) -> Result<Spread
     let full_range = workbook
         .worksheet_range(&sheet_name)
         .with_context(|| format!("read sheet {sheet_name}"))?;
-    let (start_row, start_col) = full_range.start().unwrap_or((0, 0));
+    let (raw_start_row, raw_start_col) = full_range.start().unwrap_or((0, 0));
+    let (start_row, start_col) = (raw_start_row as usize, raw_start_col as usize);
     let (row_start, col_start, row_end, col_end) = match &input.range {
         Some(range) => {
             let ((r1, c1), (r2, c2)) =
@@ -497,7 +498,7 @@ fn edit_inner(path: &PathBuf, input: &EditSpreadsheetToolInput) -> Result<String
         .unwrap_or_else(|| {
             book.get_sheet_collection()
                 .first()
-                .map(|sheet| sheet.get_name().clone())
+                .map(|sheet| sheet.get_name().to_string())
                 .unwrap_or_else(|| "Sheet1".to_string())
         });
 
