@@ -97,10 +97,18 @@ fn format_data(data: &Data) -> String {
             }
         }
         Data::Bool(value) => value.to_string(),
-        Data::DateTime(value) => value
-            .as_datetime()
-            .map(|datetime| datetime.to_string())
-            .unwrap_or_else(|| value.as_f64().to_string()),
+        Data::DateTime(value) => {
+            // Excel serial (1900 epoch). Convert with the 25569-day offset
+            // to the Unix epoch instead of calamine's feature-gated helpers.
+            let serial = value.as_f64();
+            let (days, frac) = (serial.floor(), serial - serial.floor());
+            let unix_days = days as i64 - 25569;
+            let secs = unix_days * 86_400 + (frac * 86_400.0).round() as i64;
+            match chrono::NaiveDateTime::from_timestamp_opt(secs, 0) {
+                Some(datetime) => datetime.format("%Y-%m-%d %H:%M:%S").to_string(),
+                None => serial.to_string(),
+            }
+        }
         Data::DateTimeIso(value) => value.clone(),
         Data::DurationIso(value) => value.clone(),
         Data::Error(value) => format!("#{value:?}"),
@@ -480,7 +488,7 @@ fn edit_inner(path: &PathBuf, input: &EditSpreadsheetToolInput) -> Result<String
                 .any(|sheet| sheet.get_name() == name.as_str());
             if !exists {
                 book.new_sheet(name.as_str())
-                    .with_context(|| format!("create sheet `{name}`"))?;
+                    .map_err(|e| anyhow::anyhow!("create sheet `{name}`: {e}"))?;
             }
             applied.push(format!("created sheet `{name}`"));
         }
