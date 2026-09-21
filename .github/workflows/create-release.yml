@@ -39,6 +39,9 @@ jobs:
           rm -rf dist && mkdir -p dist/linux dist/win
           gh run download "$linux_run" -R "$repo" -D dist/linux
           gh run download "$win_run" -R "$repo" -D dist/win
+          # flatten: gh run download nests files inside per-artifact directories
+          find dist/linux -mindepth 2 -type f -exec mv -t dist/linux {} +
+          find dist/win -mindepth 2 -type f -exec mv -t dist/win {} +
           base="v$(date -u +%Y.%m.%d)"
           final="$base"; n=1
           while git ls-remote --tags origin "refs/tags/$final" | grep -q .; do n=$((n+1)); final="$base.$n"; done
