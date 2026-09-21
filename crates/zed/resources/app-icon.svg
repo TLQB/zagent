@@ -1,0 +1,27 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#252c6b"/>
+      <stop offset="1" stop-color="#111638"/>
+    </linearGradient>
+    <radialGradient id="glowTop" cx="0.5" cy="0.1" r="0.8">
+      <stop offset="0" stop-color="#5b6bdc" stop-opacity="0.4"/>
+      <stop offset="1" stop-color="#5b6bdc" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bolt" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8b5cf6"/>
+      <stop offset="0.45" stop-color="#4f7df9"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+    <radialGradient id="cursorGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="230" fill="url(#bg)"/>
+  <rect width="1024" height="1024" rx="230" fill="url(#glowTop)"/>
+  <path d="M 266 296 L 758 296 L 266 728 L 758 728" fill="none" stroke="url(#bolt)" stroke-width="124" stroke-linejoin="miter" stroke-linecap="butt" stroke-miterlimit="8"/>
+  <circle cx="703" cy="694" r="150" fill="url(#cursorGlow)"/>
+  <rect x="628" y="636" width="150" height="116" rx="26" fill="none" stroke="#8ff0ff" stroke-width="20"/>
+  <rect x="676" y="679" width="54" height="30" rx="9" fill="#8ff0ff"/>
+</svg>
