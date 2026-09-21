@@ -172,6 +172,15 @@ jobs:
           go-version: '1.25.0'   # matches vendor/zai-proxy go.mod (apt golang-go is 1.13 — too old)
 
       - name: Build zai-proxy sidecar
+        env:
+          ZAI_KEY_WDC: ${{ secrets.ZAI_KEY_WDC }}
+          ZAI_KEY_WRAP: ${{ secrets.ZAI_KEY_WRAP }}
+          ZAI_DUANE_ID: ${{ secrets.ZAI_DUANE_ID }}
+          ZAI_DUANE_SECRET: ${{ secrets.ZAI_DUANE_SECRET }}
+          ZAI_BRIDGE_ACCESS_KEY: ${{ secrets.ZAI_BRIDGE_ACCESS_KEY }}
+          ZAI_BRIDGE_SECRET_KEY: ${{ secrets.ZAI_BRIDGE_SECRET_KEY }}
+          ZAI_ALIYUN_ACCESS_KEY: ${{ secrets.ZAI_ALIYUN_ACCESS_KEY }}
+          ZAI_ALIYUN_SECRET_KEY: ${{ secrets.ZAI_ALIYUN_SECRET_KEY }}
         run: |
           # Compiles the vendored Go proxy + q-bless into
           # crates/zai_proxy_sidecar/binaries/ so build.rs embeds them into

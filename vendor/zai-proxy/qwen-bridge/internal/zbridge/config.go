@@ -65,8 +65,13 @@ func envOr(key, def string) string {
 }
 
 var (
-	accessKey = envOr("ALIYUN_ACCESS_KEY", "REDACTED000000000000000")
-	secretKey = envOr("ALIYUN_SECRET_KEY", "REDACTED000000000000000000000000")
+	// Placeholders in the public source; real values are injected at link
+	// time via -ldflags -X (see scripts/build-zai-proxy-sidecar.sh).
+	defaultAliyunAccessKey = "REDACTED000000000000000"
+	defaultAliyunSecretKey = "REDACTED000000000000000000000000"
+
+	accessKey = envOr("ALIYUN_ACCESS_KEY", defaultAliyunAccessKey)
+	secretKey = envOr("ALIYUN_SECRET_KEY", defaultAliyunSecretKey)
 	SALT_KEY  = envOr("QWEN_SALT_KEY", "key-@@@@)))()((9))-xxxx&&&%%%%%")
 )
 

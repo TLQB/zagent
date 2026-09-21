@@ -46,6 +46,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -62,12 +63,7 @@ import (
 const (
 	ivString = "0123456789ABCDEF" // fixed IV for every AES call
 
-	keyWWrap = "REDACTED00000000" // Log1 uuid-wrap payload
-	keyWDC   = "REDACTED00000000" // decrypts the server's DeviceConfig blob
-
 	cloudauthURL = "https://cloudauth-device-dualstack.ap-southeast-1.aliyuncs.com/"
-	duaneID      = "REDACTED000000000000000"       // cloudauth AccessKeyId
-	duaneSecret  = "REDACTED00000000000000000000" // + "&" appended for HMAC
 
 	feilinVersion = "W20220202"
 	appKey        = "3795d28242a11619bc25f786f84e53d4"
@@ -79,9 +75,20 @@ const (
 
 	captchaOpenInitURL   = "https://no8xfe.captcha-open-southeast.aliyuncs.com/"
 	captchaOpenVerifyURL = "https://no8xfe-verify.captcha-open-southeast.aliyuncs.com/"
+)
+
+// Credentials are placeholders in the public source. Real values are injected
+// at link time (-ldflags -X) by scripts/build-zai-proxy-sidecar.sh from the
+// environment or scripts/.zai-proxy-secrets.env locally, and from GitHub
+// Actions secrets in CI. They must be vars (not consts) for -X to apply.
+var (
+	keyWWrap = "REDACTED00000000" // Log1 uuid-wrap payload
+	keyWDC   = "REDACTED00000000" // decrypts the server's DeviceConfig blob
+
+	duaneID     = "REDACTED000000000000000"      // cloudauth AccessKeyId
+	duaneSecret = "REDACTED00000000000000000000" // + "&" appended for HMAC
 
 	// VerifyCaptchaV3 uses the bridge (cloudauth) credential pair — same as
-	// internal/zbridge. Mixing browser-style init (AaduaneId) with
 	// bridge-style verify yields F001 — certifyIDs are credential-scoped.
 	bridgeAccessKey = "REDACTED000000000000000"
 	bridgeSecretKey = "REDACTED000000000000000000000000"
@@ -672,8 +679,9 @@ Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
 `
 
 // fullChromePath locates the full (non-headless-shell) Chromium binary that
-// Playwright installed. QBLESS_CHROME overrides; otherwise the newest
-// ~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome wins.
+// Playwright installed. QBLESS_CHROME overrides; otherwise per-OS Playwright
+// cache globs apply, with real Chrome/Edge installs as a last resort
+// (launching headless-shell earns the Q a low trust score — canary F001).
 func fullChromePath() string {
 	if v := os.Getenv("QBLESS_CHROME"); v != "" {
 		return v
@@ -682,12 +690,48 @@ func fullChromePath() string {
 	if err != nil {
 		return ""
 	}
-	matches, _ := filepath.Glob(filepath.Join(home, ".cache", "ms-playwright", "chromium-*", "chrome-linux*", "chrome"))
+	var patterns []string
+	switch runtime.GOOS {
+	case "windows":
+		patterns = []string{
+			filepath.Join(home, "AppData", "Local", "ms-playwright", "chromium-*", "chrome-win", "chrome.exe"),
+			filepath.Join(home, "AppData", "Local", "ms-playwright", "chromium-*", "chrome-win64", "chrome.exe"),
+			`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+			filepath.Join(home, "AppData", "Local", "Google", "Chrome", "Application", "chrome.exe"),
+			`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
+			`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
+		}
+	case "darwin":
+		patterns = []string{
+			filepath.Join(home, "Library", "Caches", "ms-playwright", "chromium-*", "chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium"),
+			filepath.Join(home, "Library", "Caches", "ms-playwright", "chromium-*", "chrome-mac-arm64", "Chromium.app", "Contents", "MacOS", "Chromium"),
+		}
+	default:
+		patterns = []string{
+			filepath.Join(home, ".cache", "ms-playwright", "chromium-*", "chrome-linux*", "chrome"),
+		}
+	}
+	var matches []string
+	for _, pattern := range patterns {
+		if found, _ := filepath.Glob(pattern); len(found) > 0 {
+			matches = append(matches, found...)
+		}
+	}
 	if len(matches) == 0 {
 		return ""
 	}
 	sort.Strings(matches) // chromium-1234 < chromium-1300 … newest last
 	return matches[len(matches)-1]
+}
+
+// chromePathOrNil omits ExecutablePath when no full Chrome was found so
+// playwright-go falls back to its own default instead of an empty path.
+func chromePathOrNil() *string {
+	if p := fullChromePath(); p != "" {
+		return playwright.String(p)
+	}
+	return nil
 }
 
 func captureLog1DC(wait time.Duration) (dcB64 string, err error) {
@@ -715,7 +759,7 @@ func captureLog1DC(wait time.Duration) (dcB64 string, err error) {
 		// TLS/h2 fingerprint that earns the Q a low trust score at Log1 (canary
 		// F001, verified 2026-09-03). netprobe7 (the known-PASS capture) used
 		// exactly this executablePath.
-		ExecutablePath: playwright.String(fullChromePath()),
+		ExecutablePath: chromePathOrNil(),
 		Args: []string{
 			"--disable-blink-features=AutomationControlled",
 			"--no-sandbox",

@@ -117,6 +117,15 @@ jobs:
 
       - name: Build zai-proxy sidecar
         shell: bash
+        env:
+          ZAI_KEY_WDC: ${{ secrets.ZAI_KEY_WDC }}
+          ZAI_KEY_WRAP: ${{ secrets.ZAI_KEY_WRAP }}
+          ZAI_DUANE_ID: ${{ secrets.ZAI_DUANE_ID }}
+          ZAI_DUANE_SECRET: ${{ secrets.ZAI_DUANE_SECRET }}
+          ZAI_BRIDGE_ACCESS_KEY: ${{ secrets.ZAI_BRIDGE_ACCESS_KEY }}
+          ZAI_BRIDGE_SECRET_KEY: ${{ secrets.ZAI_BRIDGE_SECRET_KEY }}
+          ZAI_ALIYUN_ACCESS_KEY: ${{ secrets.ZAI_ALIYUN_ACCESS_KEY }}
+          ZAI_ALIYUN_SECRET_KEY: ${{ secrets.ZAI_ALIYUN_SECRET_KEY }}
         run: |
           # Produces zai-proxy-windows-amd64 + q-bless-windows-amd64 under
           # crates/zai_proxy_sidecar/binaries/ for build.rs to embed.

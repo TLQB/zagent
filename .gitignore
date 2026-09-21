@@ -78,3 +78,6 @@ crates/zai_proxy_sidecar/binaries/
 # live credentials - never commit
 tokens.sqlite
 tokens.sqlite.live
+
+# local sidecar credentials (never commit)
+scripts/.zai-proxy-secrets.env
