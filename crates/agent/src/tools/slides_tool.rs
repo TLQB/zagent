@@ -26,7 +26,9 @@ const SLIDES_BASE_URL: &str = "https://zai-proxy-worker.tranlequybaotk12.workers
 /// Gateway bearer token (resolved by the glm crate: env vars
 /// ZAI_WORKER_EMAIL/ZAI_WORKER_PASSWORD, or fallback ZAGENT_GLM_API_KEY).
 async fn proxy_token(client: &dyn HttpClient) -> String {
-    glm::gateway_token(client).await.unwrap_or_default()
+    glm::gateway_token(client, glm::worker_base_url().as_str())
+        .await
+        .unwrap_or_default()
 }
 
 /// Generate a slide deck from a text topic. The deck is authored by the GLM

@@ -19,18 +19,6 @@ pub struct AllLanguageModelSettingsContent {
     pub llama_cpp: Option<LlamaCppSettingsContent>,
     #[serde(rename = "zagent.glm")]
     pub glm: Option<GLMSettingsContent>,
-    #[serde(rename = "nim")]
-    pub nim: Option<NimSettingsContent>,
-    #[serde(rename = "tokenrouter")]
-    pub tokenrouter: Option<TokenRouterSettingsContent>,
-    #[serde(rename = "justwoker")]
-    pub justwoker: Option<JustWokerSettingsContent>,
-    #[serde(rename = "nextrouter")]
-    pub nextrouter: Option<NextRouterSettingsContent>,
-    #[serde(rename = "zen")]
-    pub zen: Option<ZenSettingsContent>,
-    #[serde(rename = "zagent.kilo")]
-    pub kilo: Option<KiloSettingsContent>,
     pub lmstudio: Option<LmStudioSettingsContent>,
     pub mistral: Option<MistralSettingsContent>,
     pub ollama: Option<OllamaSettingsContent>,
@@ -359,62 +347,6 @@ pub struct GLMSettingsContent {
     pub available_models: Option<Vec<LlamaCppAvailableModel>>,
     /// Overrides the context length reported for every model.
     pub context_window: Option<u64>,
-    pub custom_headers: Option<HashMap<String, String>>,
-}
-
-#[with_fallible_options]
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema, MergeFrom)]
-pub struct NimSettingsContent {
-    pub api_url: Option<String>,
-    /// Whether to automatically discover models served by the server.
-    /// Defaults to true.
-    pub auto_discover: Option<bool>,
-    pub available_models: Option<Vec<LlamaCppAvailableModel>>,
-    /// Overrides the context length reported for every model.
-    pub context_window: Option<u64>,
-    pub custom_headers: Option<HashMap<String, String>>,
-    /// URL to fetch a model filter list. When set, only models that exist in both
-    /// the NVIDIA API response and the filter list will be shown.
-    pub nim_filter_url: Option<String>,
-}
-
-#[with_fallible_options]
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema, MergeFrom)]
-pub struct TokenRouterSettingsContent {
-    pub api_url: Option<String>,
-    pub available_models: Option<Vec<LlamaCppAvailableModel>>,
-    pub custom_headers: Option<HashMap<String, String>>,
-}
-
-#[with_fallible_options]
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema, MergeFrom)]
-pub struct JustWokerSettingsContent {
-    pub api_url: Option<String>,
-    pub available_models: Option<Vec<LlamaCppAvailableModel>>,
-    pub custom_headers: Option<HashMap<String, String>>,
-}
-
-#[with_fallible_options]
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema, MergeFrom)]
-pub struct NextRouterSettingsContent {
-    pub api_url: Option<String>,
-    pub available_models: Option<Vec<LlamaCppAvailableModel>>,
-    pub custom_headers: Option<HashMap<String, String>>,
-}
-
-#[with_fallible_options]
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema, MergeFrom)]
-pub struct ZenSettingsContent {
-    pub api_url: Option<String>,
-    pub available_models: Option<Vec<LlamaCppAvailableModel>>,
-    pub custom_headers: Option<HashMap<String, String>>,
-}
-
-#[with_fallible_options]
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema, MergeFrom)]
-pub struct KiloSettingsContent {
-    pub api_url: Option<String>,
-    pub available_models: Option<Vec<LlamaCppAvailableModel>>,
     pub custom_headers: Option<HashMap<String, String>>,
 }
 

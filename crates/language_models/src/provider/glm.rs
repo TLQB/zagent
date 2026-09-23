@@ -3,11 +3,12 @@ use collections::{HashMap, HashSet};
 use credentials_provider::CredentialsProvider;
 use futures::Stream;
 use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
-use gpui::{App, AsyncApp, Context, Entity, Task, SharedString};
+use gpui::{App, AsyncApp, ClickEvent, Context, Entity, SharedString, Task, Window};
 use http_client::{CustomHeaders, HttpClient};
 use language_model::util::parse_tool_arguments;
 use language_model::{
-    ApiKeyState, AuthenticateError, EnvVar, IconOrSvg, LanguageModel, ApiKeyConfiguration,
+    ApiKeyState, AuthenticateError, EnvVar, IconOrSvg, InlineDescription, InlineProviderSettings,
+    LanguageModel,
     LanguageModelCompletionError, LanguageModelCompletionEvent, LanguageModelEffortLevel,
     LanguageModelId, LanguageModelName, LanguageModelProvider, LanguageModelProviderId,
     LanguageModelProviderName, LanguageModelProviderState, LanguageModelRequest,
@@ -15,23 +16,17 @@ use language_model::{
     ProviderSettingsView, RateLimiter, Role, StopReason, TokenUsage,
     env_var,
 };
-use glm::{
-    GLM_API_URL, ModelEntry, get_models, stream_chat_completion,
-    stream_model_events,
-};
+use glm::{GLM_API_URL, ModelEntry, get_models, stream_chat_completion};
 pub use settings::LlamaCppAvailableModel as AvailableModel;
 use settings::{Settings, SettingsStore};
 use std::pin::Pin;
 use std::sync::LazyLock;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::time::Duration;
-use ui::prelude::*;
-use util::ResultExt;
+use ui::{ConfiguredApiCard, Divider, prelude::*};
+use ui_input::InputField;
 
 use crate::AllLanguageModelSettings;
 
-const GLM_DOWNLOAD_URL: &str = "https://github.com/izaart95-jpg/GLM-Free-API";
-const GLM_MODELS_URL: &str = "https://openrouter.ai/z-ai";
 
 const PROVIDER_ID: LanguageModelProviderId = LanguageModelProviderId::new("zagent.glm");
 const PROVIDER_NAME: LanguageModelProviderName = LanguageModelProviderName::new("Zagent-GLM");
@@ -39,7 +34,6 @@ const PROVIDER_NAME: LanguageModelProviderName = LanguageModelProviderName::new(
 const API_KEY_ENV_VAR_NAME: &str = "ZAGENT_GLM_API_KEY";
 static API_KEY_ENV_VAR: LazyLock<EnvVar> = env_var!(API_KEY_ENV_VAR_NAME);
 
-const MODEL_EVENT_RECONNECT_INTERVAL: Duration = Duration::from_secs(5);
 const ASSUMED_UNLOADED_CONTEXT: u64 = 131_072;
 
 // ====================================================================
@@ -135,7 +129,6 @@ pub struct State {
     http_client: Arc<dyn HttpClient>,
     fetched_models: Vec<glm::Model>,
     fetch_model_task: Option<Task<Result<()>>>,
-    model_event_task: Option<Task<()>>,
     capability_cells: CapabilityCells,
     loading_progress: LoadingProgress,
 }
@@ -146,11 +139,6 @@ impl State {
     }
 
     fn set_api_key(&mut self, api_key: Option<String>, cx: &mut Context<Self>) -> Task<Result<()>> {
-        // Hand the personal token to the embedded proxy sidecar (writes the
-        // user token file + restarts the proxy with it). No-op when the key
-        // is unchanged / proxy already healthy with it.
-        if let Some(key) = api_key.as_deref() {
-        }
         let credentials_provider = self.credentials_provider.clone();
         let api_url = GLMLanguageModelProvider::api_url(cx);
         let task = self.api_key_state.store(
@@ -162,7 +150,6 @@ impl State {
         );
 
         self.fetched_models.clear();
-        self.model_event_task = None;
         write_recover(&self.loading_progress).clear();
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -239,8 +226,6 @@ impl State {
                 }
             };
 
-            let is_router = entries.iter().any(ModelEntry::is_router_entry);
-
             let loading_ids: HashSet<String> = entries
                 .iter()
                 .filter(|entry| entry.is_loading())
@@ -260,91 +245,272 @@ let models: Vec<glm::Model> = entries
                 );
                 sync_capability_cells(&this.capability_cells, &effective);
                 write_recover(&this.loading_progress).retain(|id, _| loading_ids.contains(id));
-                if is_router {
-                    if this.model_event_task.is_none() {
-                        this.start_model_event_stream(cx);
-                    }
-                } else {
-                    this.model_event_task = None;
-                }
                 cx.notify();
             })
         })
     }
 
-    fn start_model_event_stream(&mut self, cx: &mut Context<Self>) {
-        let http_client = Arc::clone(&self.http_client);
-        let api_url = GLMLanguageModelProvider::api_url(cx);
-        let extra_headers = GLMLanguageModelProvider::settings(cx)
-            .custom_headers
-            .clone();
-
-        self.model_event_task = Some(cx.spawn(async move |this, cx| {
-            loop {
-                match stream_model_events(
-                    http_client.as_ref(),
-                    &api_url,
-                    &extra_headers,
-                )
-                .await
-                {
-                    Ok(mut events) => {
-                        while let Some(event) = events.next().await {
-                            let Some(event) = event.log_err() else {
-                                continue;
-                            };
-                            if let Some(exit_code) = event.load_failure() {
-                                log::error!(
-                                    "GLM model {} failed to load (exit code {exit_code})",
-                                    event.model
-                                );
-                            }
-                            if let Some(progress) = event.load_progress() {
-                                let label = SharedString::from(progress.progress_label());
-                                if this
-                                    .update(cx, |this, cx| {
-                                        write_recover(&this.loading_progress)
-                                            .insert(event.model.clone(), label);
-                                        cx.notify();
-                                    })
-                                    .is_err()
-                                {
-                                    return;
-                                }
-                                continue;
-                            }
-                            if !event.changes_model_state() {
-                                continue;
-                            }
-                            if this
-                                .update(cx, |this, cx| {
-                                    write_recover(&this.loading_progress).remove(&event.model);
-                                    this.restart_fetch_models_task(cx);
-                                })
-                                .is_err()
-                            {
-                                return;
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        log::warn!("GLM model event stream unavailable: {error:#}");
-                    }
-                }
-
-                cx.background_executor()
-                    .timer(MODEL_EVENT_RECONNECT_INTERVAL)
-                    .await;
-                if this.update(cx, |_, _| ()).is_err() {
-                    return;
-                }
-            }
-        }));
-    }
-
     fn restart_fetch_models_task(&mut self, cx: &mut Context<Self>) {
         let task = self.fetch_models(cx);
         self.fetch_model_task.replace(task);
+    }
+
+    // ── Settings-UI credentials ──────────────────────────────────────
+
+    const GATEWAY_URL: &str = glm::GLM_API_URL;
+
+    /// Re-installs credentials saved in the OS keychain (written by a prior
+    /// sign-in) into the glm runtime so they are active in this session.
+    fn restore_stored_credentials(&mut self, cx: &mut Context<Self>) {
+        let provider = self.credentials_provider.clone();
+        let url = Self::GATEWAY_URL.to_string();
+        cx.spawn(async move |this, cx| {
+            let Ok(Some((username, secret))) = provider.read_credentials(&url, cx).await else {
+                return;
+            };
+            let secret = String::from_utf8_lossy(&secret).to_string();
+            this.update(cx, |this, _| this.apply_credentials(&username, &secret)).ok();
+        })
+        .detach();
+    }
+
+    /// Applies already-decoded credentials to the glm runtime.
+    fn apply_credentials(&mut self, username: &str, secret: &str) {
+        match username {
+            "token" => glm::set_runtime_token(Some(secret.to_string())),
+            "account" => {
+                let Some((email, password)) = secret.split_once(':') else {
+                    return;
+                };
+                glm::set_runtime_login(Some(email.to_string()), Some(password.to_string()));
+            }
+            _ => {}
+        }
+    }
+
+    /// Persists credentials to the keychain (so they survive restarts) and
+    /// applies them immediately.
+    fn save_credentials(
+        &mut self,
+        username: &str,
+        secret: String,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<()>> {
+        self.apply_credentials(username, &secret);
+        let provider = self.credentials_provider.clone();
+        let url = Self::GATEWAY_URL.to_string();
+        let username = username.to_string();
+        cx.spawn(async move |_, cx| {
+            provider
+                .write_credentials(&url, &username, secret.as_bytes(), cx)
+                .await
+        })
+    }
+
+    /// Signs in with account credentials, caching the JWT on success.
+    fn sign_in_with_password(
+        &mut self,
+        email: String,
+        password: String,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<()>> {
+        let http_client = self.http_client.clone();
+        cx.spawn(async move |this, cx| {
+            let result =
+                glm::sign_in_with_password(http_client.as_ref(), &email, &password).await;
+            this.update(cx, |this, cx| {
+                this.fetch_models(cx).detach();
+            })?;
+            result.map(|_| ())
+        })
+    }
+
+    fn sign_out(&mut self, cx: &mut Context<Self>) -> Task<Result<()>> {
+        glm::set_runtime_token(None);
+        glm::set_runtime_login(None, None);
+        self.fetched_models.clear();
+        cx.notify();
+        let provider = self.credentials_provider.clone();
+        let url = Self::GATEWAY_URL.to_string();
+        cx.spawn(async move |_, cx| provider.delete_credentials(&url, cx).await)
+    }
+}
+
+// ── Settings-UI sign-in view ─────────────────────────────────────────────
+
+/// Inline sign-in form for the Z.AI gateway worker: paste a pre-issued token,
+/// or enter the gateway account email + password.
+pub struct ConfigurationView {
+    state: Entity<State>,
+    token_field: Entity<InputField>,
+    email_field: Entity<InputField>,
+    password_field: Entity<InputField>,
+    error: Option<SharedString>,
+    signing_in: bool,
+}
+
+impl ConfigurationView {
+    fn new(state: Entity<State>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let token_field =
+            cx.new(|cx| InputField::new(window, cx, "Paste a gateway token").masked(true));
+        let email_field = cx.new(|cx| InputField::new(window, cx, "you@example.com"));
+        let password_field =
+            cx.new(|cx| InputField::new(window, cx, "Password").masked(true));
+        Self {
+            state,
+            token_field,
+            email_field,
+            password_field,
+            error: None,
+            signing_in: false,
+        }
+    }
+
+    fn save_token(&mut self, _event: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let token = self.token_field.read(cx).text(cx).trim().to_string();
+        if token.is_empty() {
+            self.error = Some("Token is empty.".into());
+            cx.notify();
+            return;
+        }
+        self.error = None;
+        self.state.update(cx, |state, cx| {
+            state
+                .save_credentials("token", token, cx)
+                .detach_and_log_err(cx);
+            state.restart_fetch_models_task(cx);
+        });
+        cx.notify();
+    }
+
+    fn sign_in(&mut self, _event: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let email = self.email_field.read(cx).text(cx).trim().to_string();
+        let password = self.password_field.read(cx).text(cx).to_string();
+        if email.is_empty() || password.is_empty() {
+            self.error = Some("Email and password are both required.".into());
+            cx.notify();
+            return;
+        }
+        self.error = None;
+        self.signing_in = true;
+        let task = self.state.update(cx, |state, cx| {
+            state.save_credentials(
+                "account",
+                format!("{email}:{password}"),
+                cx,
+            )
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = async {
+                task.await?;
+                let sign_in = this.update(cx, |this, cx| {
+                    this.state.update(cx, |state, cx| {
+                        state.sign_in_with_password(email.clone(), password.clone(), cx)
+                    })
+                })?;
+                sign_in.await?;
+                this.update(cx, |this, cx| {
+                    this.signing_in = false;
+                    cx.notify();
+                })?;
+                anyhow::Ok(())
+            }
+            .await;
+            if let Err(error) = result {
+                this.update(cx, |this, cx| {
+                    this.signing_in = false;
+                    this.error = Some(error.to_string().into());
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn sign_out(&mut self, _event: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| state.sign_out(cx).detach_and_log_err(cx));
+        self.token_field.update(cx, |field, cx| field.clear(window, cx));
+        self.email_field.update(cx, |field, cx| field.clear(window, cx));
+        self.password_field.update(cx, |field, cx| field.clear(window, cx));
+        cx.notify();
+    }
+}
+
+impl Render for ConfigurationView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let signed_in = glm::has_runtime_credentials();
+
+        let token_section = v_flex()
+            .gap_1p5()
+            .child(
+                Label::new("Gateway token")
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
+            .child(self.token_field.clone())
+            .child(
+                Button::new("glm-save-token", "Use Token")
+                    .style(ButtonStyle::Filled)
+                    .label_size(LabelSize::Small)
+                    .on_click(cx.listener(Self::save_token)),
+            );
+
+        let account_section = v_flex()
+            .gap_1p5()
+            .child(
+                Label::new("Account")
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
+            .child(self.email_field.clone())
+            .child(self.password_field.clone())
+            .child(
+                Button::new("glm-sign-in", if self.signing_in { "Signing in…" } else { "Sign In" })
+                    .style(ButtonStyle::Filled)
+                    .label_size(LabelSize::Small)
+                    .disabled(self.signing_in)
+                    .on_click(cx.listener(Self::sign_in)),
+            );
+
+        let error_line = self
+            .error
+            .clone()
+            .map(|error| {
+                Label::new(error)
+                    .size(LabelSize::Small)
+                    .color(Color::Error)
+                    .into_any_element()
+            })
+            .unwrap_or_else(|| div().into_any_element());
+
+        v_flex()
+            .gap_3()
+            .max_w_96()
+            .child(if signed_in {
+                v_flex()
+                    .gap_1p5()
+                    .child(ConfiguredApiCard::new(
+                        "glm-gateway-configured",
+                        "Signed in to the Z.AI gateway",
+                    ))
+                    .child(
+                        Button::new("glm-sign-out", "Sign Out")
+                            .style(ButtonStyle::Subtle)
+                            .label_size(LabelSize::Small)
+                            .on_click(cx.listener(Self::sign_out)),
+                    )
+                    .into_any_element()
+            } else {
+                v_flex()
+                    .gap_3()
+                    .child(token_section)
+                    .child(Divider::horizontal())
+                    .child(account_section)
+                    .into_any_element()
+            })
+            .child(error_line)
+            .into_any_element()
     }
 }
 
@@ -480,7 +646,6 @@ impl GLMLanguageModelProvider {
                                     credentials_provider,
                                     cx,
                                 );
-                                this.model_event_task = None;
                                 write_recover(&this.loading_progress).clear();
                                 this.authenticate(cx).detach();
                             }
@@ -501,7 +666,6 @@ impl GLMLanguageModelProvider {
                     http_client,
                     fetched_models: Default::default(),
                     fetch_model_task: None,
-                    model_event_task: None,
                     capability_cells,
                     loading_progress,
                     api_key_state: ApiKeyState::new(Self::api_url(cx), (*API_KEY_ENV_VAR).clone()),
@@ -509,8 +673,10 @@ impl GLMLanguageModelProvider {
                 }
             }),
         };
-        this.state
-            .update(cx, |state, cx| state.restart_fetch_models_task(cx));
+        this.state.update(cx, |state, cx| {
+            state.restore_stored_credentials(cx);
+            state.restart_fetch_models_task(cx);
+        });
         this
     }
 
@@ -596,15 +762,26 @@ impl LanguageModelProvider for GLMLanguageModelProvider {
         self.state.update(cx, |state, cx| state.authenticate(cx))
     }
 
-fn settings_view(&self, cx: &mut App) -> Option<ProviderSettingsView> {
-    let state = self.state.read(cx);
-    Some(ProviderSettingsView::ApiKey(ApiKeyConfiguration::new(
-        state.api_key_state.has_key(),
-        state.api_key_state.is_from_env_var(),
-        state.api_key_state.env_var_name().clone(),
-        GLM_API_URL.into(),
-    )))
-}
+    fn settings_view(&self, _cx: &mut App) -> Option<ProviderSettingsView> {
+        Some(ProviderSettingsView::Inline(InlineProviderSettings {
+            title: None,
+            description: Some(InlineDescription::Text(
+                "Sign in to the Z.AI gateway worker with a token, or with your account email and password."
+                    .into(),
+            )),
+            create_view: Arc::new({
+                let state = self.state.clone();
+                move |window, cx| {
+                    cx.new(|cx| {
+                        let view = ConfigurationView::new(state.clone(), window, cx);
+                        cx.observe(&state, |_, _, cx| cx.notify()).detach();
+                        view
+                    })
+                    .into()
+                }
+            }),
+        }))
+    }
 }
 
 pub struct GLMLanguageModel {

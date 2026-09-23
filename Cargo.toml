@@ -9,12 +9,6 @@ members = [
     "crates/agent_servers",
     "crates/agent_settings",
     "crates/glm",
-    "crates/kilo",
-    "crates/nim",
-    "crates/justwoker",
-    "crates/nextrouter",
-    "crates/zen",
-        "crates/tokenrouter",
     "crates/agent_skills",
     "crates/agent_ui",
     "crates/ai_onboarding",
@@ -406,12 +400,6 @@ livekit_api = { path = "crates/livekit_api" }
 livekit_client = { path = "crates/livekit_client" }
 llama_cpp = { path = "crates/llama_cpp" }
 glm = { path = "crates/glm" }
-kilo = { path = "crates/kilo" }
-nim = { path = "crates/nim" } 
-tokenrouter = { path = "crates/tokenrouter" } 
-justwoker = { path = "crates/justwoker" }
-nextrouter = { path = "crates/nextrouter" }
-zen = { path = "crates/zen" }
 lmstudio = { path = "crates/lmstudio" }
 lsp = { path = "crates/lsp" }
 lsp_locations = { path = "crates/lsp_locations" }
@@ -1076,13 +1064,6 @@ json_schema_store = { codegen-units = 1 }
 llama_cpp = { codegen-units = 1 }
 lmstudio = { codegen-units = 1 }
 glm = { codegen-units = 1 }
-kilo = { codegen-units = 1 }
-nim = { codegen-units = 1 }
-tokenrouter = { codegen-units = 1 }
-justwoker = { codegen-units = 1 }
-nextrouter = { codegen-units = 1 }
-zen = { codegen-units = 1 }
-menu = { codegen-units = 1 }
 notifications = { codegen-units = 1 }
 ollama = { codegen-units = 1 }
 outline = { codegen-units = 1 }

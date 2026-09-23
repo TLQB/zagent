@@ -13,27 +13,26 @@ ported selectively instead of merged wholesale.
 
 ---
 
-### Embedded model proxy (zai-proxy sidecar)
+### Z.AI gateway worker (built-in provider)
 
-Zagent ships a Go-based model proxy embedded directly into the editor binary
-([`crates/zai_proxy_sidecar`](./crates/zai_proxy_sidecar), vendored Go source under
-[`vendor/zai-proxy`](./vendor/zai-proxy)). At startup the editor:
+Zagent ships a built-in `Zagent-GLM` language model provider that talks to a
+self-hosted [Cloudflare Worker gateway](https://github.com/TLQB/zai-proxy) exposing an
+OpenAI-compatible API (`/v1/models`, `/v1/chat/completions`). No local proxy, sidecar
+binary or Go toolchain is involved: the editor calls the worker directly.
 
-1. Reuses an already-running proxy when `/api/healthz` answers on the port, otherwise
-   extracts the embedded binary to the user state dir and spawns it;
-2. Serves an OpenAI-compatible API at `http://127.0.0.1:3001` (`/v1/models`,
-   `/v1/chat/completions`) backed by Z.AI / GLM, including session handling,
-   captcha minting and geo-bypass — no client SDKs required.
+Signing in (Settings, AI, LLM Providers, Zagent-GLM):
 
-Credentials and access control:
+- paste a pre-issued gateway **token**, or
+- enter the gateway account **email + password** — the editor logs in via
+  `POST /auth/login`, caches the 24h JWT and refreshes it automatically.
 
-- Your personal Z.AI token is **never baked into the binary**. Provide it by signing
-  in through the `zagent.glm` provider UI (stored in the OS keychain, mirrored to
-  `~/.config/zai-proxy/token`), or via the `ZAGENT_GLM_API_KEY` environment variable.
-- The model selector is gated by `ZAGENT_ENABLED_PROVIDERS` (comma-separated provider
-  IDs). The editor sets it to `zagent.glm` by default; unset it to show every provider.
-- The editor authenticates to the local proxy with a built-in password. If you run the
-  proxy standalone and change `AUTH_TOKEN`, update the provider settings accordingly.
+Credentials are stored in the OS keychain and persist across restarts.
+
+Headless alternatives (env vars, first match wins):
+
+- `ZAI_WORKER_EMAIL` + `ZAI_WORKER_PASSWORD` — auto-login
+- `ZAGENT_GLM_API_KEY` — pre-issued bearer token
+- `ZAI_WORKER_URL` — override the gateway base URL
 
 ### Additional language model providers
 
@@ -86,10 +85,6 @@ To build the editor only, skipping the collab server and other workspace members
 cargo build --release -p zed
 ```
 
-The embedded proxy is only included when the vendored Go artifacts have been built
-first (`scripts/build-zai-proxy-sidecar.sh`); without them the editor still builds
-and runs, it just skips the sidecar.
-
 ### Vendored dependencies
 
 - `vendor/xim-ctext` is a patched copy of the upstream crate. It fixes a
@@ -98,8 +93,6 @@ and runs, it just skips the sidecar.
   X11 input methods that interleave UTF-8 and Latin-1 segments — notably Vietnamese
   Telex via `ibus-unikey`, where pressing Space dropped the last character of a
   syllable. The patch is applied through `[patch]` in the workspace `Cargo.toml`.
-- `vendor/zai-proxy` is the Go source of the embedded model proxy (see above). It is
-  vendored rather than fetched so the editor build is fully reproducible offline.
 
 ### Licensing
 

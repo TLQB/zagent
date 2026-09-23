@@ -45,12 +45,6 @@ language_model.workspace = true
 language_models_cloud.workspace = true
 llama_cpp = { workspace = true, features = ["schemars"] }
 glm = { workspace = true, features = ["schemars"] }
-kilo = { workspace = true, features = ["schemars"] }
-nim = { workspace = true, features = ["schemars"] }
-tokenrouter = { workspace = true, features = ["schemars"] }
-justwoker = { workspace = true, features = ["schemars"] }
-nextrouter = { workspace = true, features = ["schemars"] }
-zen = { workspace = true, features = ["schemars"] }
 lmstudio = { workspace = true, features = ["schemars"] }
 log.workspace = true
 menu.workspace = true

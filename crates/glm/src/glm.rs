@@ -18,14 +18,16 @@ const DEFAULT_CONTEXT_LENGTH: u64 = 4096;
 // request fails with 401 (or when the cached entry is within the refresh
 // skew window).
 //
-// Credentials are read from the environment:
-//   ZAI_WORKER_EMAIL    (required) — gateway user email
-//   ZAI_WORKER_PASSWORD (required) — gateway user password
-//   ZAI_WORKER_URL      (optional) — override the worker base URL
+// Credential sources, first match wins:
+//   1. Runtime credentials set from the provider settings UI (a pre-issued
+//      token, or gateway account email + password) and mirrored to the OS
+//      keychain by the provider.
+//   2. ZAI_WORKER_EMAIL + ZAI_WORKER_PASSWORD env vars — auto-login.
+//   3. ZAGENT_GLM_API_KEY env var (a pre-issued bearer) so headless
+//      deployments that mint a long-lived token out-of-band keep working.
 //
-// If ZAI_WORKER_EMAIL/ZAI_WORKER_PASSWORD are not set, we fall back to
-// ZAGENT_GLM_API_KEY (a pre-issued bearer) so existing deployments that
-// mint a long-lived token out-of-band keep working.
+// ZAI_WORKER_URL (env) or the runtime base-URL override may point the
+// client at a self-hosted gateway worker.
 
 #[derive(Clone, Debug, serde::Deserialize)]
 struct LoginResponse {
@@ -44,6 +46,58 @@ const TOKEN_REFRESH_SKEW_SECS: u64 = 60 * 10;
 
 static CACHED_TOKEN: parking_lot::Mutex<Option<CachedToken>> = parking_lot::Mutex::new(None);
 
+// Credentials entered through the settings UI. They take precedence over the
+// environment variables so an explicitly signed-in user is never ignored.
+static RUNTIME_TOKEN: parking_lot::RwLock<Option<String>> = parking_lot::RwLock::new(None);
+static RUNTIME_LOGIN: parking_lot::RwLock<Option<(String, String)>> =
+    parking_lot::RwLock::new(None);
+static RUNTIME_BASE_URL: parking_lot::RwLock<Option<String>> = parking_lot::RwLock::new(None);
+
+/// Installs a pre-issued gateway bearer token from the settings UI. Pass
+/// `None` to clear it.
+pub fn set_runtime_token(token: Option<String>) {
+    *RUNTIME_TOKEN.write() = token.filter(|token| !token.is_empty());
+    invalidate_gateway_token();
+}
+
+/// Installs gateway account credentials (email + password) from the settings
+/// UI. Pass `None` for either side to clear them.
+pub fn set_runtime_login(email: Option<String>, password: Option<String>) {
+    let credentials = email
+        .zip(password)
+        .filter(|(email, password)| !email.is_empty() && !password.is_empty());
+    *RUNTIME_LOGIN.write() = credentials;
+    invalidate_gateway_token();
+}
+
+/// Overrides the gateway worker base URL (e.g. a self-hosted deployment).
+pub fn set_runtime_base_url(url: Option<String>) {
+    *RUNTIME_BASE_URL.write() = url.filter(|url| !url.is_empty());
+}
+
+/// The email of the account signed in through the settings UI, if any.
+pub fn runtime_login_email() -> Option<String> {
+    RUNTIME_LOGIN
+        .read()
+        .as_ref()
+        .map(|(email, _)| email.clone())
+}
+
+/// Whether any settings-UI credentials are currently installed.
+pub fn has_runtime_credentials() -> bool {
+    RUNTIME_TOKEN.read().is_some() || RUNTIME_LOGIN.read().is_some()
+}
+
+/// Validates gateway account credentials by performing a login (which also
+/// caches the resulting JWT). Used by the settings-UI sign-in flow.
+pub async fn sign_in_with_password(
+    client: &dyn HttpClient,
+    email: &str,
+    password: &str,
+) -> Result<String> {
+    login_refresh(client, &worker_base_url(), email, password).await
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -51,10 +105,16 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Base URL of the gateway worker. Honors `ZAI_WORKER_URL` if set, otherwise
-/// falls back to the compiled-in `GLM_API_URL`.
+/// Base URL of the gateway worker: the settings-UI override first, then the
+/// `ZAI_WORKER_URL` env var, then the compiled-in `GLM_API_URL`.
 pub fn worker_base_url() -> String {
-    std::env::var("ZAI_WORKER_URL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| GLM_API_URL.to_string())
+    if let Some(url) = RUNTIME_BASE_URL.read().clone() {
+        return url;
+    }
+    std::env::var("ZAI_WORKER_URL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| GLM_API_URL.to_string())
 }
 
 /// Returns a cached token if it is still valid (with a refresh skew), otherwise
@@ -79,12 +139,12 @@ pub fn invalidate_gateway_token() {
 
 /// Logs in to the gateway worker and caches the returned JWT. Returns the
 /// token on success.
-async fn login_refresh(client: &dyn HttpClient) -> Result<String> {
-    let email = std::env::var("ZAI_WORKER_EMAIL")
-        .map_err(|_| anyhow!("ZAI_WORKER_EMAIL not set"))?;
-    let password = std::env::var("ZAI_WORKER_PASSWORD")
-        .map_err(|_| anyhow!("ZAI_WORKER_PASSWORD not set"))?;
-    let base = worker_base_url();
+async fn login_refresh(
+    client: &dyn HttpClient,
+    base: &str,
+    email: &str,
+    password: &str,
+) -> Result<String> {
     let uri = format!("{base}/auth/login");
     let body = serde_json::json!({ "email": email, "password": password }).to_string();
     let request = HttpRequest::builder()
@@ -107,25 +167,42 @@ async fn login_refresh(client: &dyn HttpClient) -> Result<String> {
     Ok(token)
 }
 
-/// Resolves the bearer token to send to the gateway worker.
+/// Resolves the bearer token to send to the gateway worker at `base`.
 ///
 /// Resolution order:
-/// 1. `ZAI_WORKER_EMAIL` + `ZAI_WORKER_PASSWORD` set → auto-login + cache.
-/// 2. else → `ZAGENT_GLM_API_KEY` (pre-issued bearer).
-/// 3. else → empty string (worker will reject with 401, caller decides).
-pub async fn gateway_token(client: &dyn HttpClient) -> Result<String> {
+/// 1. Runtime credentials from the settings UI: account email + password →
+///    auto-login + cache, otherwise the pre-issued token.
+/// 2. `ZAI_WORKER_EMAIL` + `ZAI_WORKER_PASSWORD` env vars → auto-login + cache.
+/// 3. `ZAGENT_GLM_API_KEY` (pre-issued bearer).
+/// 4. Empty string (worker rejects with 401, caller decides).
+pub async fn gateway_token(client: &dyn HttpClient, base: &str) -> Result<String> {
     // Fast path: a cached token from a prior login is still valid.
-    if let Some(tok) = cached_token_if_valid() {
-        return Ok(tok);
+    if let Some(token) = cached_token_if_valid() {
+        return Ok(token);
     }
-    // Slow path: either login-then-cache, or a pre-issued env bearer.
-    let has_credentials = std::env::var("ZAI_WORKER_EMAIL").is_ok()
-        && std::env::var("ZAI_WORKER_PASSWORD").is_ok();
-    if has_credentials {
-        login_refresh(client).await
-    } else {
-        Ok(std::env::var("ZAGENT_GLM_API_KEY").unwrap_or_default())
+    // Settings-UI credentials first.
+    let runtime_login = RUNTIME_LOGIN.read().clone();
+    if let Some((email, password)) = runtime_login {
+        return login_refresh(client, base, &email, &password).await;
     }
+    let runtime_token = RUNTIME_TOKEN.read().clone();
+    if let Some(token) = runtime_token {
+        return Ok(token);
+    }
+    // Environment-variable fallbacks for headless deployments.
+    let env_login = match (
+        std::env::var("ZAI_WORKER_EMAIL"),
+        std::env::var("ZAI_WORKER_PASSWORD"),
+    ) {
+        (Ok(email), Ok(password)) if !email.is_empty() && !password.is_empty() => {
+            Some((email, password))
+        }
+        _ => None,
+    };
+    if let Some((email, password)) = env_login {
+        return login_refresh(client, base, &email, &password).await;
+    }
+    Ok(std::env::var("ZAGENT_GLM_API_KEY").unwrap_or_default())
 }
 
 /// A model exposed to the rest of Zed, after merging API discovery with
@@ -576,7 +653,7 @@ pub async fn stream_chat_completion(
     let body_bytes = serde_json::to_string(&request)?;
 
     for attempt in 0..2u8 {
-        let token = gateway_token(client).await.unwrap_or_default();
+        let token = gateway_token(client, api_url).await.unwrap_or_default();
         let request_builder = http::Request::builder()
             .method(Method::POST)
             .uri(&uri)
@@ -637,7 +714,7 @@ pub async fn get_models(
 ) -> Result<Vec<ModelEntry>> {
     let uri = format!("{api_url}/v1/models");
     for attempt in 0..2u8 {
-        let token = gateway_token(client).await.unwrap_or_default();
+        let token = gateway_token(client, api_url).await.unwrap_or_default();
         let request = HttpRequest::builder()
             .method(Method::GET)
             .uri(&uri)
@@ -663,46 +740,4 @@ pub async fn get_models(
         return Ok(response.data);
     }
     anyhow::bail!("gateway auth failed after retry");
-}
-
-/// Opens the router's `GET /models/sse` event stream. Each item is one parsed
-/// event; the stream ends when the connection closes. Only available on builds
-/// that expose `/models/sse` (router mode).
-pub async fn stream_model_events(
-    client: &dyn HttpClient,
-    api_url: &str,
-    extra_headers: &CustomHeaders,
-) -> Result<BoxStream<'static, Result<ModelEvent>>> {
-    let uri = format!("{api_url}/models/sse");
-    let token = gateway_token(client).await.unwrap_or_default();
-    let request = HttpRequest::builder()
-        .method(Method::GET)
-        .uri(uri)
-        .header("Accept", "text/event-stream")
-        .header("Authorization", format!("Bearer {token}"))
-        .extra_headers(extra_headers)
-        .body(AsyncBody::default())?;
-
-    let mut response = client.send(request).await?;
-    if !response.status().is_success() {
-        let mut body = String::new();
-        response.body_mut().read_to_string(&mut body).await?;
-        anyhow::bail!(
-            "Failed to open GLM model event stream: {} {}",
-            response.status(),
-            body,
-        );
-    }
-
-    let reader = BufReader::new(response.into_body());
-    Ok(reader
-        .lines()
-        .filter_map(|line| async move {
-            // Each event is a single `data:` line carrying the JSON envelope;
-            // other SSE lines (comments, blank separators) are ignored.
-            let line = line.ok()?;
-            let payload = line.strip_prefix("data:")?.trim_start();
-            Some(serde_json::from_str::<ModelEvent>(payload).map_err(|error| anyhow!(error)))
-        })
-        .boxed())
 }
