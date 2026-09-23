@@ -21,10 +21,13 @@ use project::Project;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Base URL of the embedded sidecar.
+/// Base URL of the gateway worker.
 const SLIDES_BASE_URL: &str = "https://zai-proxy-worker.tranlequybaotk12.workers.dev";
-/// Built-in sidecar auth password (mirrors the glm provider wiring).
-fn proxy_token() -> String { std::env::var("ZAI_TOKEN").unwrap_or_default() }
+/// Gateway bearer token (resolved by the glm crate: env vars
+/// ZAI_WORKER_EMAIL/ZAI_WORKER_PASSWORD, or fallback ZAGENT_GLM_API_KEY).
+async fn proxy_token(client: &dyn HttpClient) -> String {
+    glm::gateway_token(client).await.unwrap_or_default()
+}
 
 /// Generate a slide deck from a text topic. The deck is authored by the GLM
 /// model through the local proxy and packaged locally into a real PPTX whose
@@ -275,7 +278,7 @@ async fn collect_deck(
         .method(http::Method::POST)
         .uri(format!("{SLIDES_BASE_URL}/v1/slides"))
         .header("Content-Type", "application/json")
-        .header("Authorization", format!("Bearer {}", proxy_token()))
+        .header("Authorization", format!("Bearer {}", proxy_token(client.as_ref()).await))
         .body(AsyncBody::from(body))?;
 
     let response = client.send(request).await?;

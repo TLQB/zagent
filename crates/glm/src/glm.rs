@@ -1,7 +1,7 @@
 use anyhow::{Context as _, Result, anyhow};
 use futures::{AsyncBufReadExt, AsyncReadExt, StreamExt, io::BufReader, stream::BoxStream};
 use http_client::{
-    AsyncBody, CustomHeaders, HttpClient, HttpRequestExt, Method, Request as HttpRequest,
+    AsyncBody, CustomHeaders, HttpClient, Method, Request as HttpRequest,
     RequestBuilderExt, http,
 };
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,123 @@ use serde_json::Value;
 pub const GLM_API_URL: &str = "https://zai-proxy-worker.tranlequybaotk12.workers.dev";
 
 const DEFAULT_CONTEXT_LENGTH: u64 = 4096;
+
+// ── Gateway worker authentication ──────────────────────────────────
+// The Cloudflare worker gateway authenticates `/v1/*` requests with a
+// short-lived HS256 JWT issued by `POST /auth/login`. The token expires
+// after 24 hours, so we cache it in-process and refresh lazily when a
+// request fails with 401 (or when the cached entry is within the refresh
+// skew window).
+//
+// Credentials are read from the environment:
+//   ZAI_WORKER_EMAIL    (required) — gateway user email
+//   ZAI_WORKER_PASSWORD (required) — gateway user password
+//   ZAI_WORKER_URL      (optional) — override the worker base URL
+//
+// If ZAI_WORKER_EMAIL/ZAI_WORKER_PASSWORD are not set, we fall back to
+// ZAGENT_GLM_API_KEY (a pre-issued bearer) so existing deployments that
+// mint a long-lived token out-of-band keep working.
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct LoginResponse {
+    token: String,
+}
+
+#[derive(Clone, Debug)]
+struct CachedToken {
+    token: String,
+    /// Unix-epoch seconds at which the token was minted.
+    minted_at: u64,
+}
+
+const TOKEN_TTL_SECS: u64 = 24 * 60 * 60;
+const TOKEN_REFRESH_SKEW_SECS: u64 = 60 * 10;
+
+static CACHED_TOKEN: parking_lot::Mutex<Option<CachedToken>> = parking_lot::Mutex::new(None);
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Base URL of the gateway worker. Honors `ZAI_WORKER_URL` if set, otherwise
+/// falls back to the compiled-in `GLM_API_URL`.
+pub fn worker_base_url() -> String {
+    std::env::var("ZAI_WORKER_URL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| GLM_API_URL.to_string())
+}
+
+/// Returns a cached token if it is still valid (with a refresh skew), otherwise
+/// None. Caller should follow up with [`login_refresh`] when this returns
+/// None.
+fn cached_token_if_valid() -> Option<String> {
+    let guard = CACHED_TOKEN.lock();
+    let cached = guard.as_ref()?;
+    let age = now_secs().saturating_sub(cached.minted_at);
+    if age + TOKEN_REFRESH_SKEW_SECS < TOKEN_TTL_SECS {
+        Some(cached.token.clone())
+    } else {
+        None
+    }
+}
+
+/// Forces the next [`gateway_token`] call to re-login. Call this after
+/// observing a 401 from the gateway.
+pub fn invalidate_gateway_token() {
+    *CACHED_TOKEN.lock() = None;
+}
+
+/// Logs in to the gateway worker and caches the returned JWT. Returns the
+/// token on success.
+async fn login_refresh(client: &dyn HttpClient) -> Result<String> {
+    let email = std::env::var("ZAI_WORKER_EMAIL")
+        .map_err(|_| anyhow!("ZAI_WORKER_EMAIL not set"))?;
+    let password = std::env::var("ZAI_WORKER_PASSWORD")
+        .map_err(|_| anyhow!("ZAI_WORKER_PASSWORD not set"))?;
+    let base = worker_base_url();
+    let uri = format!("{base}/auth/login");
+    let body = serde_json::json!({ "email": email, "password": password }).to_string();
+    let request = HttpRequest::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header("Content-Type", "application/json")
+        .body(AsyncBody::from(body))?;
+    let mut response = client.send(request).await?;
+    let mut body = String::new();
+    response.body_mut().read_to_string(&mut body).await?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "gateway login failed: {} {}",
+        response.status(),
+        body,
+    );
+    let parsed: LoginResponse = serde_json::from_str(&body).context("parse login response")?;
+    let token = parsed.token;
+    *CACHED_TOKEN.lock() = Some(CachedToken { token: token.clone(), minted_at: now_secs() });
+    Ok(token)
+}
+
+/// Resolves the bearer token to send to the gateway worker.
+///
+/// Resolution order:
+/// 1. `ZAI_WORKER_EMAIL` + `ZAI_WORKER_PASSWORD` set → auto-login + cache.
+/// 2. else → `ZAGENT_GLM_API_KEY` (pre-issued bearer).
+/// 3. else → empty string (worker will reject with 401, caller decides).
+pub async fn gateway_token(client: &dyn HttpClient) -> Result<String> {
+    // Fast path: a cached token from a prior login is still valid.
+    if let Some(tok) = cached_token_if_valid() {
+        return Ok(tok);
+    }
+    // Slow path: either login-then-cache, or a pre-issued env bearer.
+    let has_credentials = std::env::var("ZAI_WORKER_EMAIL").is_ok()
+        && std::env::var("ZAI_WORKER_PASSWORD").is_ok();
+    if has_credentials {
+        login_refresh(client).await
+    } else {
+        Ok(std::env::var("ZAGENT_GLM_API_KEY").unwrap_or_default())
+    }
+}
 
 /// A model exposed to the rest of Zed, after merging API discovery with
 /// user-configured overrides.
@@ -452,90 +569,100 @@ impl ModelEvent {
 pub async fn stream_chat_completion(
     client: &dyn HttpClient,
     api_url: &str,
-    api_key: Option<&str>,
     request: ChatCompletionRequest,
     extra_headers: &CustomHeaders,
 ) -> Result<BoxStream<'static, Result<ResponseStreamEvent>>> {
     let uri = format!("{api_url}/v1/chat/completions");
-    let request_builder = http::Request::builder()
-        .method(Method::POST)
-        .uri(uri)
-        .header("Content-Type", "application/json")
-        .when_some(api_key, |builder, api_key| {
-            builder.header("Authorization", format!("Bearer {api_key}"))
-        });
+    let body_bytes = serde_json::to_string(&request)?;
 
-    let request = request_builder
-        .extra_headers(extra_headers)
-        .body(AsyncBody::from(serde_json::to_string(&request)?))?;
-    let mut response = client.send(request).await?;
-    if response.status().is_success() {
-        let reader = BufReader::new(response.into_body());
-        Ok(reader
-            .lines()
-            .filter_map(|line| async move {
-                match line {
-                    Ok(line) => {
-                        let line = line.strip_prefix("data: ")?;
-                        if line == "[DONE]" {
-                            None
-                        } else {
-                            match serde_json::from_str(line) {
-                                Ok(ResponseStreamResult::Ok(response)) => Some(Ok(response)),
-                                Ok(ResponseStreamResult::Err { error }) => {
-                                    Some(Err(anyhow!(error.message)))
+    for attempt in 0..2u8 {
+        let token = gateway_token(client).await.unwrap_or_default();
+        let request_builder = http::Request::builder()
+            .method(Method::POST)
+            .uri(&uri)
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {token}"));
+        let req = request_builder
+            .extra_headers(extra_headers)
+            .body(AsyncBody::from(body_bytes.clone()))?;
+        let mut response = client.send(req).await?;
+
+        if response.status().as_u16() == 401 && attempt == 0 {
+            invalidate_gateway_token();
+            continue;
+        }
+
+        if response.status().is_success() {
+            let reader = BufReader::new(response.into_body());
+            return Ok(reader
+                .lines()
+                .filter_map(|line| async move {
+                    match line {
+                        Ok(line) => {
+                            let line = line.strip_prefix("data: ")?;
+                            if line == "[DONE]" {
+                                None
+                            } else {
+                                match serde_json::from_str(line) {
+                                    Ok(ResponseStreamResult::Ok(response)) => Some(Ok(response)),
+                                    Ok(ResponseStreamResult::Err { error }) => {
+                                        Some(Err(anyhow!(error.message)))
+                                    }
+                                    Err(error) => Some(Err(anyhow!(error))),
                                 }
-                                Err(error) => Some(Err(anyhow!(error))),
                             }
                         }
+                        Err(error) => Some(Err(anyhow!(error))),
                     }
-                    Err(error) => Some(Err(anyhow!(error))),
-                }
-            })
-            .boxed())
-    } else {
-        let mut body = String::new();
-        response.body_mut().read_to_string(&mut body).await?;
-        anyhow::bail!(
-            "Failed to connect to GLM API: {} {}",
-            response.status(),
-            body,
-        );
+                })
+                .boxed());
+        } else {
+            let mut body = String::new();
+            response.body_mut().read_to_string(&mut body).await?;
+            anyhow::bail!(
+                "Failed to connect to GLM API: {} {}",
+                response.status(),
+                body,
+            );
+        }
     }
+    anyhow::bail!("gateway auth failed after retry");
 }
 
 /// Lists the models the server is serving via `GET /v1/models`.
 pub async fn get_models(
     client: &dyn HttpClient,
     api_url: &str,
-    api_key: Option<&str>,
     extra_headers: &CustomHeaders,
 ) -> Result<Vec<ModelEntry>> {
     let uri = format!("{api_url}/v1/models");
-    let request = HttpRequest::builder()
-        .method(Method::GET)
-        .uri(uri)
-        .header("Accept", "application/json")
-        .when_some(api_key, |builder, api_key| {
-            builder.header("Authorization", format!("Bearer {api_key}"))
-        })
-        .extra_headers(extra_headers)
-        .body(AsyncBody::default())?;
-
-    let mut response = client.send(request).await?;
-
-    let mut body = String::new();
-    response.body_mut().read_to_string(&mut body).await?;
-
-    anyhow::ensure!(
-        response.status().is_success(),
-        "Failed to connect to GLM API: {} {}",
-        response.status(),
-        body,
-    );
-    let response: ListModelsResponse =
-        serde_json::from_str(&body).context("Unable to parse GLM models response")?;
-    Ok(response.data)
+    for attempt in 0..2u8 {
+        let token = gateway_token(client).await.unwrap_or_default();
+        let request = HttpRequest::builder()
+            .method(Method::GET)
+            .uri(&uri)
+            .header("Accept", "application/json")
+            .header("Authorization", format!("Bearer {token}"))
+            .extra_headers(extra_headers)
+            .body(AsyncBody::default())?;
+        let mut response = client.send(request).await?;
+        if response.status().as_u16() == 401 && attempt == 0 {
+            invalidate_gateway_token();
+            continue;
+        }
+        let mut body = String::new();
+        response.body_mut().read_to_string(&mut body).await?;
+        anyhow::ensure!(
+            response.status().is_success(),
+            "Failed to connect to GLM API: {} {}",
+            response.status(),
+            body,
+        );
+        let response: ListModelsResponse =
+            serde_json::from_str(&body).context("Unable to parse GLM models response")?;
+        return Ok(response.data);
+    }
+    anyhow::bail!("gateway auth failed after retry");
 }
 
 /// Opens the router's `GET /models/sse` event stream. Each item is one parsed
@@ -544,17 +671,15 @@ pub async fn get_models(
 pub async fn stream_model_events(
     client: &dyn HttpClient,
     api_url: &str,
-    api_key: Option<&str>,
     extra_headers: &CustomHeaders,
 ) -> Result<BoxStream<'static, Result<ModelEvent>>> {
     let uri = format!("{api_url}/models/sse");
+    let token = gateway_token(client).await.unwrap_or_default();
     let request = HttpRequest::builder()
         .method(Method::GET)
         .uri(uri)
         .header("Accept", "text/event-stream")
-        .when_some(api_key, |builder, api_key| {
-            builder.header("Authorization", format!("Bearer {api_key}"))
-        })
+        .header("Authorization", format!("Bearer {token}"))
         .extra_headers(extra_headers)
         .body(AsyncBody::default())?;
 

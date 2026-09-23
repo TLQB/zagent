@@ -46,6 +46,7 @@ handlebars = { workspace = true, features = ["rust-embed"] }
 heck.workspace = true
 html_to_markdown.workspace = true
 http_client.workspace = true
+glm.workspace = true
 http_proxy.workspace = true
 indoc.workspace = true
 itertools.workspace = true

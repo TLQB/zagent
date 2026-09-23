@@ -284,6 +284,7 @@ dependencies = [
  "fs",
  "futures 0.3.32",
  "git",
+ "glm",
  "gpui",
  "gpui_tokio",
  "handlebars 4.5.0",
@@ -7468,6 +7469,7 @@ dependencies = [
  "anyhow",
  "futures 0.3.32",
  "http_client",
+ "parking_lot",
  "schemars 1.0.4",
  "serde",
  "serde_json",
@@ -9869,7 +9871,6 @@ dependencies = [
  "ui_input",
  "util",
  "x_ai",
- "zai_proxy_sidecar",
  "zen",
 ]
 
@@ -22973,14 +22974,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "zai_proxy_sidecar"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "smol",
-]
-
-[[package]]
 name = "zbus"
 version = "5.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -23245,7 +23238,6 @@ dependencies = [
  "windows 0.61.3",
  "windows_resources",
  "workspace",
- "zai_proxy_sidecar",
  "zed-reqwest",
  "zed_actions",
  "zed_credentials_provider",

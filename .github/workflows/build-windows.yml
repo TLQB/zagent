@@ -2,7 +2,7 @@ name: Build Windows
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/gateway-zai-worker]
   workflow_dispatch:
 
 jobs:

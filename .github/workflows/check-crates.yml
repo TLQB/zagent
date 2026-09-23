@@ -2,7 +2,7 @@ name: Check changed crates
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/gateway-zai-worker]
     paths:
       - "crates/glm/**"
       - "crates/language_models/**"

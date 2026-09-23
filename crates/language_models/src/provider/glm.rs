@@ -218,14 +218,12 @@ impl State {
         let http_client = Arc::clone(&self.http_client);
         let settings = GLMLanguageModelProvider::settings(cx);
         let api_url = GLMLanguageModelProvider::api_url(cx);
-        let api_key: Option<Arc<str>> = Some(Arc::from("Waguri"));
         let extra_headers = settings.custom_headers.clone();
 
         cx.spawn(async move |this, cx| {
             let entries = match get_models(
                 http_client.as_ref(),
                 &api_url,
-                api_key.as_deref(),
                 &extra_headers,
             )
             .await
@@ -277,7 +275,6 @@ let models: Vec<glm::Model> = entries
     fn start_model_event_stream(&mut self, cx: &mut Context<Self>) {
         let http_client = Arc::clone(&self.http_client);
         let api_url = GLMLanguageModelProvider::api_url(cx);
-        let api_key: Option<Arc<str>> = Some(Arc::from("Waguri"));
         let extra_headers = GLMLanguageModelProvider::settings(cx)
             .custom_headers
             .clone();
@@ -287,7 +284,6 @@ let models: Vec<glm::Model> = entries
                 match stream_model_events(
                     http_client.as_ref(),
                     &api_url,
-                    api_key.as_deref(),
                     &extra_headers,
                 )
                 .await
@@ -659,19 +655,18 @@ impl GLMLanguageModel {
         Result<futures::stream::BoxStream<'static, Result<glm::ResponseStreamEvent>>>,
     > {
         let http_client = self.http_client.clone();
-        let (api_key, api_url, extra_headers) = self.state.read_with(cx, |state, cx| {
+        let (api_url, extra_headers) = self.state.read_with(cx, |_state, cx| {
             let api_url = GLMLanguageModelProvider::api_url(cx);
             let extra_headers = GLMLanguageModelProvider::settings(cx)
                 .custom_headers
                 .clone();
-            (Some(Arc::from("Waguri")), api_url, extra_headers)
+            (api_url, extra_headers)
         });
 
         let future = self.request_limiter.stream(async move {
             let stream = stream_chat_completion(
                 http_client.as_ref(),
                 &api_url,
-                api_key.as_deref(),
                 request,
                 &extra_headers,
             )

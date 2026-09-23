@@ -52,6 +52,6 @@ jobs:
           if gh release view "$final" -R "$repo" >/dev/null 2>&1; then echo "release exists"; exit 0; fi
           gh release create "$final" -R "$repo" --target "$head_sha" \
             --title "zagent $final" \
-            --notes "Automated build of $head_sha. Includes: GLM vision (image input), Slides composer mode (native editable PPTX), generate_image tool, /v1/images/generations sidecar endpoint." \
+            --notes "Automated build of $head_sha. Includes: GLM vision (image input), Slides composer mode (native editable PPTX), generate_image tool, gateway worker integration (auth + auto-refresh)." \
             dist/linux/* dist/win/* \
             || gh release upload "$final" -R "$repo" dist/linux/* dist/win/*

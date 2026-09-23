@@ -198,8 +198,6 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
 static STARTUP_TIME: OnceLock<Instant> = OnceLock::new();
 
 fn main() {
-    // zai-proxy sidecar (embedded model proxy, 127.0.0.1:3001) — fire-and-forget.
-
     STARTUP_TIME.get_or_init(|| Instant::now());
 
     // If this process was re-executed as a Linux sandbox helper, run that mode
