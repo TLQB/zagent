@@ -6,7 +6,7 @@ on:
     paths:
       - "crates/glm/**"
       - "crates/language_models/**"
-            - "crates/agent/**"
+      - "crates/agent/**"
       - "crates/sidebar/**"
       - "crates/zed_actions/**"
       - "Cargo.toml"
