@@ -166,24 +166,6 @@ jobs:
           rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb
           df -h / | tail -1
 
-      - name: Install Go toolchain
-        with:
-
-      - name: Build zai-proxy sidecar
-        env:
-          ZAI_KEY_WDC: ${{ secrets.ZAI_KEY_WDC }}
-          ZAI_KEY_WRAP: ${{ secrets.ZAI_KEY_WRAP }}
-          ZAI_DUANE_ID: ${{ secrets.ZAI_DUANE_ID }}
-          ZAI_DUANE_SECRET: ${{ secrets.ZAI_DUANE_SECRET }}
-          ZAI_BRIDGE_ACCESS_KEY: ${{ secrets.ZAI_BRIDGE_ACCESS_KEY }}
-          ZAI_BRIDGE_SECRET_KEY: ${{ secrets.ZAI_BRIDGE_SECRET_KEY }}
-          ZAI_ALIYUN_ACCESS_KEY: ${{ secrets.ZAI_ALIYUN_ACCESS_KEY }}
-          ZAI_ALIYUN_SECRET_KEY: ${{ secrets.ZAI_ALIYUN_SECRET_KEY }}
-        run: |
-          # Compiles the vendored Go proxy + q-bless into
-          # the zagent binary (include_bytes!).
-          go clean -modcache 2>/dev/null || true   # ~1GB back, deps no longer needed
-
       - name: Build
         run: |
           export CARGO_BUILD_JOBS=4
