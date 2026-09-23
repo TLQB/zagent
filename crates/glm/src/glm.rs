@@ -7,7 +7,7 @@ use http_client::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const GLM_API_URL: &str = "http://localhost:8080";
+pub const GLM_API_URL: &str = "https://zai-proxy-worker.tranlequybaotk12.workers.dev";
 
 const DEFAULT_CONTEXT_LENGTH: u64 = 4096;
 

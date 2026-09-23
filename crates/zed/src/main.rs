@@ -199,7 +199,6 @@ static STARTUP_TIME: OnceLock<Instant> = OnceLock::new();
 
 fn main() {
     // zai-proxy sidecar (embedded model proxy, 127.0.0.1:3001) — fire-and-forget.
-    zai_proxy_sidecar::init();
 
     STARTUP_TIME.get_or_init(|| Instant::now());
 

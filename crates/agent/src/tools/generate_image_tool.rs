@@ -15,9 +15,9 @@ use ui::prelude::*;
 use util::markdown::MarkdownInlineCode;
 
 /// Base URL of the embedded sidecar (zai-proxy on 127.0.0.1:3001).
-const IMAGES_BASE_URL: &str = "http://127.0.0.1:3001";
+const IMAGES_BASE_URL: &str = "https://zai-proxy-worker.tranlequybaotk12.workers.dev";
 /// Built-in sidecar auth password (mirrors the glm provider wiring).
-const PROXY_PASSWORD: &str = "Waguri";
+fn proxy_token() -> String { std::env::var("ZAI_TOKEN").unwrap_or_default() }
 
 /// Generate an image from a text description using the Z.AI image service
 /// through the embedded local proxy.
@@ -143,7 +143,7 @@ impl AgentTool for GenerateImageTool {
                 .method(http::Method::POST)
                 .uri(format!("{IMAGES_BASE_URL}/v1/images/generations"))
                 .header("Content-Type", "application/json")
-                .header("Authorization", format!("Bearer {PROXY_PASSWORD}"))
+                .header("Authorization", format!("Bearer {}", proxy_token()))
                 .body(AsyncBody::from(body))
                 .map_err(|e| GenerateImageToolOutput::Error {
                     error: e.to_string(),

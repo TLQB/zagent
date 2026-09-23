@@ -23,7 +23,7 @@ jobs:
           sudo apt-get install -y build-essential cmake clang lld libasound2-dev libfontconfig-dev libgit2-dev libglib2.0-dev libssl-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev libsqlite3-dev
       - uses: Swatinem/rust-cache@v2
       - name: cargo check
-        run: cargo check -p zed_actions -p sidebar -p agent_ui -p agent -p glm -p language_models -p zai_proxy_sidecar
+        run: cargo check -p zed_actions -p sidebar -p agent_ui -p agent -p glm -p language_models
   build-windows:
     needs: check
     runs-on: windows-latest
@@ -111,9 +111,7 @@ jobs:
           Write-Host "==================="
 
       - name: Install Go toolchain
-        uses: actions/setup-go@v5
         with:
-          go-version: '1.25.0'   # matches vendor/zai-proxy go.mod
 
       - name: Build zai-proxy sidecar
         shell: bash
@@ -128,9 +126,6 @@ jobs:
           ZAI_ALIYUN_SECRET_KEY: ${{ secrets.ZAI_ALIYUN_SECRET_KEY }}
         run: |
           # Produces zai-proxy-windows-amd64 + q-bless-windows-amd64 under
-          # crates/zai_proxy_sidecar/binaries/ for build.rs to embed.
-          ./scripts/build-zai-proxy-sidecar.sh x86_64-pc-windows-msvc
-          ls -lah crates/zai_proxy_sidecar/binaries/
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2

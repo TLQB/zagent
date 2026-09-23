@@ -150,7 +150,6 @@ impl State {
         // user token file + restarts the proxy with it). No-op when the key
         // is unchanged / proxy already healthy with it.
         if let Some(key) = api_key.as_deref() {
-            zai_proxy_sidecar::handoff_token_once(key);
         }
         let credentials_provider = self.credentials_provider.clone();
         let api_url = GLMLanguageModelProvider::api_url(cx);

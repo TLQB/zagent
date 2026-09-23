@@ -12,7 +12,6 @@ workspace = true
 path = "src/language_models.rs"
 
 [dependencies]
-zai_proxy_sidecar = { path = "../zai_proxy_sidecar" }
 ai_onboarding.workspace = true
 async-lock.workspace = true
 anthropic = { workspace = true, features = ["schemars"] }

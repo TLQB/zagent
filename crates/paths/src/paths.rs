@@ -121,6 +121,10 @@ pub fn set_custom_data_dir(dir: &str) -> &'static PathBuf {
 /// Returns the path to the configuration directory used by Zed.
 pub fn config_dir() -> &'static PathBuf {
     CONFIG_DIR.get_or_init(|| {
+        // Gateway mode: use ZAGENT_CONFIG_DIR if set (separate from local proxy zagent)
+        if let Ok(custom_config) = std::env::var("ZAGENT_CONFIG_DIR") {
+            return PathBuf::from(custom_config);
+        }
         if let Some(custom_dir) = CUSTOM_DATA_DIR.get() {
             custom_dir.join("config")
         } else if cfg!(target_os = "windows") {

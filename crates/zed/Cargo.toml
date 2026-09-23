@@ -68,7 +68,6 @@ path = "src/visual_test_runner.rs"
 required-features = ["visual-tests"]
 
 [dependencies]
-zai_proxy_sidecar = { path = "../zai_proxy_sidecar" }
 acp_thread.workspace = true
 acp_tools.workspace = true
 action_log = { workspace = true, optional = true }
