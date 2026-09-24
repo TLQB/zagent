@@ -9763,10 +9763,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-lock",
+ "base64 0.22.1",
  "cloud_llm_client",
  "futures 0.3.32",
  "gpui_shared_string",
  "http_client",
+ "image",
  "log",
  "partial-json-fixer",
  "pretty_assertions",

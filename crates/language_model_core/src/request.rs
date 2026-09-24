@@ -52,6 +52,39 @@ impl LanguageModelImage {
     }
 
     pub fn to_base64_url(&self) -> String {
+        // Large images make upstream vision processing extremely slow (a
+        // 277KB screenshot took 85-110s server-side vs 3-7s for a small
+        // one). Downscale to the 1568px industry-standard vision input and
+        // re-encode as JPEG so uploads stay small. Falls back to the
+        // original PNG payload when decoding/re-encoding fails.
+        const MAX_EDGE: u32 = 1568;
+        const REENCODE_MIN_BYTES: usize = 64 * 1024;
+
+        use base64::Engine as _;
+        let decode_result = base64::engine::general_purpose::STANDARD.decode(self.source.as_ref());
+        if let Ok(bytes) = decode_result {
+            if let Ok(img) = image::load_from_memory(&bytes) {
+                let longest = img.width().max(img.height());
+                if longest > MAX_EDGE || bytes.len() >= REENCODE_MIN_BYTES {
+                    let resized = if longest > MAX_EDGE {
+                        img.resize(MAX_EDGE, MAX_EDGE, image::imageops::FilterType::Lanczos3)
+                    } else {
+                        img
+                    };
+                    let mut jpeg = std::io::Cursor::new(Vec::new());
+                    if resized
+                        .write_to(&mut jpeg, image::ImageFormat::Jpeg)
+                        .is_ok()
+                    {
+                        return format!(
+                            "data:image/jpeg;base64,{}",
+                            base64::engine::general_purpose::STANDARD.encode(jpeg.get_ref())
+                        );
+                    }
+                }
+            }
+        }
+
         format!("data:image/png;base64,{}", self.source)
     }
 }
