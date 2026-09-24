@@ -6,7 +6,7 @@
 {
   "language_models": {
    "zagent.glm": {
-      "api_url": "http://127.0.0.1:3001",
+      "api_url": "https://zai-proxy-worker.tranlequybaotk12.workers.dev",
       "available_models": [
         {
           "name": "glm-5.3-flash",
@@ -34,11 +34,8 @@
         }
       ]
    },
-   "nim": {
-      "api_url": "https://integrate.api.nvidia.com",
-       "nim_filter_url": "https://raw.githubusercontent.com/TLQB/zagent/refs/heads/main/nvidia_model_filter"
-    },
    "openai_compatible": {
+      "xkiro": {
       "api_url": "https://api.xkiro.com/v1",
       "available_models": [
         {
@@ -57,6 +54,7 @@
           }
         }
       ]
+      }
    }
   },
   "title_bar": {

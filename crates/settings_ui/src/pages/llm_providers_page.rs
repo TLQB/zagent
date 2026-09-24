@@ -27,7 +27,7 @@ pub(crate) fn render_llm_providers_page(
     window: &mut Window,
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
-    let hidden_provider_id = ["zagent.glm"];
+    let hidden_provider_id = [];
     let providers = LanguageModelRegistry::read_global(cx)
         .visible_providers()
         .into_iter()
