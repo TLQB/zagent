@@ -3,11 +3,11 @@ use std::sync::Arc;
 use crate::tools::slides_tool::first_worktree_dir;
 use crate::{AgentTool, ToolCallEventStream, ToolInput};
 use agent_client_protocol::schema::v1 as acp;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use futures::{AsyncReadExt, FutureExt as _};
-use gpui::{App, Entity, Task};
+use gpui::{App, Entity, ImageFormat, Task};
 use http_client::{AsyncBody, HttpClient, HttpClientWithUrl, http};
-use language_model::LanguageModelToolResultContent;
+use language_model::{LanguageModelImage, LanguageModelImageExt, LanguageModelToolResultContent};
 use project::Project;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -252,6 +252,42 @@ impl AgentTool for GenerateImageTool {
                     error: e.to_string(),
                 }
             })?;
+
+            // Emit ảnh trực tiếp vào agent panel để render inline (giống
+            // read_file_tool khi mở file ảnh). Không emit thì panel chỉ hiển
+            // thị text "Saved to: ..." và người dùng tưởng tool fail.
+            // Detect format từ magic bytes: image.z.ai có thể trả JPEG thay
+            // vì PNG; nếu hardcode sai format, gpui::Image::from_bytes sẽ
+            // giải mã fail silent và ảnh không hiển thị.
+            let format = if image_bytes.starts_with(b"\x89PNG\r\n") {
+                ImageFormat::Png
+            } else if image_bytes.starts_with(b"\xff\xd8\xff") {
+                ImageFormat::Jpeg
+            } else {
+                ImageFormat::Png
+            };
+            let gpui_image = Arc::new(gpui::Image::from_bytes(
+                format,
+                image_bytes.clone(),
+            ));
+            let language_model_image = cx
+                .update(|cx| LanguageModelImage::from_image(gpui_image, cx))
+                .await
+                .context("processing generated image")?;
+            let mime = match format {
+                ImageFormat::Jpeg => "image/jpeg",
+                _ => "image/png",
+            };
+            event_stream.update_fields(
+                acp::ToolCallUpdateFields::new().content(vec![
+                    acp::ToolCallContent::Content(acp::Content::new(
+                        acp::ContentBlock::Image(acp::ImageContent::new(
+                            language_model_image.source.clone(),
+                            mime,
+                        )),
+                    )),
+                ]),
+            );
 
             event_stream.update_fields(acp::ToolCallUpdateFields::new().title("Image generated"));
 
