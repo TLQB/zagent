@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::tools::slides_tool::first_worktree_dir;
 use crate::{AgentTool, ToolCallEventStream, ToolInput};
 use agent_client_protocol::schema::v1 as acp;
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use futures::{AsyncReadExt, FutureExt as _};
 use gpui::{App, Entity, ImageFormat, Task};
 use http_client::{AsyncBody, HttpClient, HttpClientWithUrl, http};
@@ -273,21 +273,24 @@ impl AgentTool for GenerateImageTool {
             let language_model_image = cx
                 .update(|cx| LanguageModelImage::from_image(gpui_image, cx))
                 .await
-                .context("processing generated image")?;
+                .ok()
+                .flatten();
             let mime = match format {
                 ImageFormat::Jpeg => "image/jpeg",
                 _ => "image/png",
             };
-            event_stream.update_fields(
-                acp::ToolCallUpdateFields::new().content(vec![
-                    acp::ToolCallContent::Content(acp::Content::new(
-                        acp::ContentBlock::Image(acp::ImageContent::new(
-                            language_model_image.source.clone(),
-                            mime,
+            if let Some(lm_image) = language_model_image {
+                event_stream.update_fields(
+                    acp::ToolCallUpdateFields::new().content(vec![
+                        acp::ToolCallContent::Content(acp::Content::new(
+                            acp::ContentBlock::Image(acp::ImageContent::new(
+                                lm_image.source.clone(),
+                                mime,
+                            )),
                         )),
-                    )),
-                ]),
-            );
+                    ]),
+                );
+            }
 
             event_stream.update_fields(acp::ToolCallUpdateFields::new().title("Image generated"));
 
