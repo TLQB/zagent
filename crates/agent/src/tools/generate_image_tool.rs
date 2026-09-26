@@ -273,10 +273,14 @@ impl AgentTool for GenerateImageTool {
             let language_model_image = cx
                 .update(|cx| LanguageModelImage::from_image(gpui_image, cx))
                 .await;
-            let mime = match format {
-                ImageFormat::Jpeg => "image/jpeg",
-                _ => "image/png",
-            };
+            // LanguageModelImage::from_image always re-encodes the payload to
+            // PNG (encode_png_bytes) — the mime MUST be image/png to match the
+            // data. A mime derived from the original bytes (image/jpeg for a
+            // PNG payload) makes ContentBlock::decode_image fail silently, the
+            // block degrades to a markdown placeholder and the image never
+            // renders in the agent panel (caught live: file saved + opens in
+            // an editor tab, panel shows nothing).
+            let mime = "image/png";
             if let Some(lm_image) = language_model_image {
                 event_stream.update_fields(
                     acp::ToolCallUpdateFields::new().content(vec![
