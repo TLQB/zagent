@@ -512,12 +512,8 @@ fn main() {
             // nhận byte nào trong 120s, reqwest sẽ abort thay vì treo vĩnh viễn.
             // 120s đủ rộng cho các provider có reasoning pause dài (GLM-5.3,
             // Anthropic thinking) nhưng vẫn phát hiện connection chết.
-            ReqwestClient::proxy_user_agent_and_read_timeout(
-                proxy_url,
-                &user_agent,
-                Some(std::time::Duration::from_secs(120)),
-            )
-            .expect("could not start HTTP client")
+            ReqwestClient::proxy_and_user_agent(proxy_url, &user_agent)
+                .expect("could not start HTTP client")
         };
         cx.set_http_client(Arc::new(http));
 
