@@ -272,9 +272,7 @@ impl AgentTool for GenerateImageTool {
             ));
             let language_model_image = cx
                 .update(|cx| LanguageModelImage::from_image(gpui_image, cx))
-                .await
-                .ok()
-                .flatten();
+                .await;
             let mime = match format {
                 ImageFormat::Jpeg => "image/jpeg",
                 _ => "image/png",
