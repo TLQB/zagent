@@ -7469,11 +7469,12 @@ dependencies = [
  "anyhow",
  "futures 0.3.32",
  "http_client",
+ "log",
  "parking_lot",
  "schemars 1.0.4",
  "serde",
  "serde_json",
- "tokio",
+ "smol",
  "url",
 ]
 

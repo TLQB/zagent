@@ -652,7 +652,8 @@ pub async fn stream_chat_completion(
     let uri = format!("{api_url}/v1/chat/completions");
     let body_bytes = serde_json::to_string(&request)?;
 
-    for attempt in 0..2u8 {
+    let mut transient_retries = 0u8;
+    for attempt in 0..4u8 {
         let token = gateway_token(client, api_url).await.unwrap_or_default();
         let request_builder = http::Request::builder()
             .method(Method::POST)
@@ -666,6 +667,34 @@ pub async fn stream_chat_completion(
 
         if response.status().as_u16() == 401 && attempt == 0 {
             invalidate_gateway_token();
+            continue;
+        }
+
+        // Transient gateway/upstream failures (503 capacity flare, 429 rate
+        // limit, 502/504): the gateway normalizes upstream flares to
+        // 503 + Retry-After exactly so clients can retry — honor it instead
+        // of surfacing an error toast immediately (old behavior: instant
+        // "Failed to connect to GLM API" on any 503).
+        let status = response.status().as_u16();
+        if matches!(status, 503 | 429 | 502 | 504) && transient_retries < 2 {
+            transient_retries += 1;
+            let retry_after = response
+                .headers()
+                .get("Retry-After")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(15)
+                .min(30);
+            let mut body = String::new();
+            response.body_mut().read_to_string(&mut body).await?;
+            log::warn!(
+                "GLM API transient {} (retry {}/2) — retrying in {}s: {}",
+                status,
+                transient_retries,
+                retry_after,
+                body.chars().take(140).collect::<String>()
+            );
+            smol::Timer::after(std::time::Duration::from_secs(retry_after)).await;
             continue;
         }
 
