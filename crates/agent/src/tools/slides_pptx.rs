@@ -11,6 +11,20 @@ use std::fmt::Write as _;
 const SLIDE_W: u32 = 12_192_000; // EMU, 13.33in wide — 16:9
 const SLIDE_H: u32 = 6_858_000;
 
+pub struct TextBox {
+    pub text: String,
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub font_px: f32,
+    pub bold: bool,
+    /// RRGGBB
+    pub color: String,
+    /// "l" | "c" | "r"
+    pub align: String,
+}
+
 pub struct Slide {
     pub title: String,
     pub bullets: Vec<String>,
@@ -18,6 +32,9 @@ pub struct Slide {
     /// mode). When present the picture covers the whole page; title/bullets
     /// are ignored - they live inside the rendered pixels.
     pub image: Option<Vec<u8>>,
+    /// Editable text boxes measured on the rendered page (px, 1280x720
+    /// space). Drawn on top of the background picture.
+    pub texts: Vec<TextBox>,
 }
 
 pub fn build(slides: &[Slide], doc_title: &str) -> Vec<u8> {
@@ -160,13 +177,57 @@ pub fn build(slides: &[Slide], doc_title: &str) -> Vec<u8> {
     zip.finish()
 }
 
+// text_box_xml — editable text box at the measured px position (1px = 9525
+// EMU; font px → pt ×0.75, OOXML sz in centipoints). Insets 0 so the box
+// matches the measured bounding rect exactly.
+fn text_box_xml(tb: &TextBox, id: usize) -> String {
+    let mut paras = String::new();
+    for line in tb.text.split('\n') {
+        let algn = match tb.align.as_str() {
+            "c" => " algn=\"ctr\"",
+            "r" => " algn=\"r\"",
+            _ => "",
+        };
+        let bold = if tb.bold { " b=\"1\"" } else { "" };
+        let sz = ((tb.font_px * 0.75 * 100.0).round() as u32).max(100);
+        let _ = write!(
+            paras,
+            "<a:p><a:pPr{algn}/><a:r><a:rPr lang=\"en-US\" sz=\"{sz}\"{bold}><a:solidFill><a:srgbClr val=\"{col}\"/></a:solidFill></a:rPr><a:t>{txt}</a:t></a:r></a:p>",
+            algn = algn,
+            sz = sz,
+            bold = bold,
+            col = xml_escape(&tb.color),
+            txt = xml_escape(line),
+        );
+    }
+    let x = (tb.x as i64) * 9525;
+    let y = (tb.y as i64) * 9525;
+    let w = (tb.w as i64) * 9525;
+    let h = (tb.h as i64) * 9525;
+    format!(
+        r##"<p:sp><p:nvSpPr><p:cNvPr id=\"{id}\" name=\"Text{id}\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"{x}\" y=\"{y}\"/><a:ext cx=\"{w}\" cy=\"{h}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr wrap=\"square\" lIns=\"0\" tIns=\"0\" rIns=\"0\" bIns=\"0\"/><a:lstStyle/>{paras}</p:txBody></p:sp>"##,
+        id = id,
+        x = x,
+        y = y,
+        w = w,
+        h = h,
+        paras = paras,
+    )
+}
+
 fn slide_xml(slide: &Slide) -> String {
     // Design-preserving slide: one full-bleed picture (rId2 = ../media png)
     // covering the whole 16:9 page - rendered pixels carry the design.
     if slide.image.is_some() {
-        return r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr><p:pic><p:nvPicPr><p:cNvPr id="2" name="Slide"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="6858000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>"##
-            .to_string();
+        let mut sps = String::new();
+        for (i, tb) in slide.texts.iter().enumerate() {
+            let _ = write!(sps, "{}", text_box_xml(tb, 3 + i));
+        }
+        return format!(
+            r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr><p:pic><p:nvPicPr><p:cNvPr id="2" name="Slide"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="6858000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>{sps}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>"##,
+            sps = sps
+        );
     }
     let mut body = String::new();
     for bullet in &slide.bullets {
