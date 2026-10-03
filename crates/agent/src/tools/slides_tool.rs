@@ -13,7 +13,7 @@ use super::slides_pptx;
 use crate::{AgentTool, ToolCallEventStream, ToolInput};
 use agent_client_protocol::schema::v1 as acp;
 use anyhow::{Context as _, bail};
-use futures::{AsyncBufReadExt, StreamExt, io::BufReader};
+use futures::{AsyncBufReadExt, AsyncReadExt, StreamExt, io::BufReader};
 use gpui::{App, Entity, SharedString, Task};
 use http_client::{AsyncBody, HttpClient, HttpClientWithUrl, http};
 use language_model::LanguageModelToolResultContent;
@@ -178,8 +178,33 @@ impl AgentTool for GenerateSlidesTool {
                 })?;
 
             event_stream
-                .update_fields(acp::ToolCallUpdateFields::new().title("Packaging editable PPTX…"));
-            let pptx_bytes = slides_pptx::build(&html_to_pptx_slides(&deck), "presentation");
+                .update_fields(acp::ToolCallUpdateFields::new().title("Rendering slide designs…"));
+            // Design-preserving hybrid: gateway renders each slide's HTML via
+            // Browser Rendering (1280x720, text hidden) + measured text boxes
+            // -> background PNG + editable text on top. Falls back to the
+            // editable title+bullets deck when the render endpoint fails.
+            let rendered = render_deck_images(http_client.clone(), &deck).await;
+            let ppt_slides = match rendered {
+                Some(slides) => deck
+                    .slides
+                    .iter()
+                    .zip(
+                        slides
+                            .into_iter()
+                            .chain(std::iter::repeat_with(RenderedSlide::empty)),
+                    )
+                    .map(|(sl, rs)| slides_pptx::Slide {
+                        title: strip_tags(&sl.title),
+                        bullets: Vec::new(),
+                        image: rs.png,
+                        texts: rs.texts,
+                    })
+                    .collect::<Vec<_>>(),
+                None => html_to_pptx_slides(&deck),
+            };
+            event_stream
+                .update_fields(acp::ToolCallUpdateFields::new().title("Packaging PPTX…"));
+            let pptx_bytes = slides_pptx::build(&ppt_slides, "presentation");
             let pptx_path = out_dir.join("slides.pptx");
             std::fs::write(&pptx_path, &pptx_bytes)
                 .with_context(|| format!("write {:?}", pptx_path))
@@ -384,6 +409,106 @@ fn unescape_entities(text: &str) -> String {
         .replace("&nbsp;", " ")
 }
 
+/// Rendered by the gateway: one PNG per slide (text hidden) + measured text
+/// boxes for the editable layer.
+struct RenderedSlide {
+    png: Option<Vec<u8>>,
+    texts: Vec<slides_pptx::TextBox>,
+}
+
+impl RenderedSlide {
+    fn empty() -> Self {
+        Self {
+            png: None,
+            texts: Vec::new(),
+        }
+    }
+}
+
+/// POSTs the deck to the gateway's /v1/slides/render endpoint (Browser
+/// Rendering renders each slide's HTML at 1280x720 with the text hidden and
+/// measures the text elements). Returns None when the endpoint fails so the
+/// caller falls back to the editable title+bullets deck.
+async fn render_deck_images(
+    client: Arc<dyn HttpClient>,
+    deck: &SlideDeckEvent,
+) -> Option<Vec<RenderedSlide>> {
+    use base64::Engine as _;
+    let body = serde_json::json!({
+        "slides": deck
+            .slides
+            .iter()
+            .map(|sl| serde_json::json!({"title": sl.title, "html": sl.html}))
+            .collect::<Vec<_>>(),
+        "css": deck.global_css,
+        "text_layer": true,
+    })
+    .to_string();
+    let request = http::Request::builder()
+        .method(http::Method::POST)
+        .uri(format!("{SLIDES_BASE_URL}/v1/slides/render"))
+        .header("Content-Type", "application/json")
+        .header(
+            "Authorization",
+            format!("Bearer {}", proxy_token(client.as_ref()).await),
+        )
+        .body(AsyncBody::from(body))
+        .ok()?;
+    let mut response = client.send(request).await.ok()?;
+    if !response.status().is_success() {
+        log::warn!("slides render endpoint returned {}", response.status());
+        return None;
+    }
+    let mut text = String::new();
+    response.body_mut().read_to_string(&mut text).await.ok()?;
+    #[derive(Deserialize)]
+    struct RenderResponse {
+        images: Vec<Option<String>>,
+        #[serde(default)]
+        texts: Vec<Vec<RenderText>>,
+    }
+    #[derive(Deserialize)]
+    struct RenderText {
+        t: String,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        fs: f64,
+        wgt: i64,
+        col: String,
+        al: String,
+    }
+    let parsed: RenderResponse = serde_json::from_str(&text).ok()?;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let mut out = Vec::with_capacity(parsed.images.len());
+    for (i, b64) in parsed.images.into_iter().enumerate() {
+        let png = b64.and_then(|sv| engine.decode(sv).ok());
+        let texts = parsed
+            .texts
+            .get(i)
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|it| slides_pptx::TextBox {
+                        text: it.t.clone(),
+                        x: it.x.round() as i32,
+                        y: it.y.round() as i32,
+                        w: it.w.round() as i32,
+                        h: it.h.round() as i32,
+                        font_px: it.fs as f32,
+                        bold: it.wgt >= 600,
+                        color: it.col.clone(),
+                        align: it.al.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.push(RenderedSlide { png, texts });
+    }
+    Some(out)
+}
+
 fn html_to_pptx_slides(deck: &SlideDeckEvent) -> Vec<slides_pptx::Slide> {
     deck.slides
         .iter()
@@ -391,6 +516,7 @@ fn html_to_pptx_slides(deck: &SlideDeckEvent) -> Vec<slides_pptx::Slide> {
             title: strip_tags(&slide.title),
             bullets: extract_bullets(&slide.html),
             image: None,
+            texts: Vec::new(),
         })
         .collect()
 }
