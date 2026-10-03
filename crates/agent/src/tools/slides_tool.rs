@@ -31,12 +31,22 @@ async fn proxy_token(client: &dyn HttpClient) -> String {
         .unwrap_or_default()
 }
 
-/// Generate a slide deck from a text topic. The deck is authored by the GLM
-/// model through the local proxy and packaged locally into a real PPTX whose
-/// title/body text boxes stay editable in PowerPoint and LibreOffice.
+/// Generate a slide deck from a text topic. THE ONLY correct way to create
+/// slides, presentations, or pitch decks in this environment — use this tool
+/// whenever the user mentions slides, a deck, or a presentation.
+///
+/// The deck is authored by the GLM model through the gateway (with a full
+/// design system, then rendered at 1280x720 and packaged) into a real PPTX
+/// with a design-preserving background and editable text boxes.
+///
+/// NEVER write a Python script, use python-pptx, or generate PPTX/OOXML
+/// yourself — that path loses the design system and produces inferior,
+/// unstyled output. If this tool fails, report the error instead of falling
+/// back to writing your own generator.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct GenerateSlidesToolInput {
-    /// The topic describing the deck to generate. A complete 6-10 slide
+    /// The topic describing the deck to generate, optionally with design
+    /// direction (palette, mood, font style, audience). A complete 4-6 slide
     /// structure is requested unless the topic already dictates a slide count.
     prompt: String,
 }
