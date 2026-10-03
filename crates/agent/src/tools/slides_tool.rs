@@ -261,6 +261,9 @@ enum SlidesEvent {
     Progress {
         #[serde(default)]
         chars: Option<usize>,
+        /// Gateway-computed completion percent (slide-based); None = legacy.
+        #[serde(default)]
+        percent: Option<u8>,
     },
     #[serde(rename = "op")]
     Op {
@@ -326,13 +329,14 @@ async fn collect_deck(
         }
         match serde_json::from_str::<SlidesEvent>(payload) {
             Ok(SlidesEvent::Deck(deck)) => return Ok(deck),
-            Ok(SlidesEvent::Progress { chars }) => {
-                if let Some(chars) = chars {
-                    event_stream.update_fields(
-                        acp::ToolCallUpdateFields::new()
-                            .title(format!("Authoring deck… {chars} chars")),
-                    );
-                }
+            Ok(SlidesEvent::Progress { chars, percent }) => {
+                let title = match percent {
+                    Some(p) => format!("Authoring deck… {p}%"),
+                    None => format!("Authoring deck… {} chars", chars.unwrap_or(0)),
+                };
+                event_stream.update_fields(
+                    acp::ToolCallUpdateFields::new().title(title),
+                );
             }
             Ok(SlidesEvent::Op { tool, position }) => {
                 let stage = match (tool.as_deref(), position) {
