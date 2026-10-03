@@ -58,7 +58,7 @@ pub fn build(slides: &[Slide], doc_title: &str) -> Vec<u8> {
             "<Override PartName=\"/ppt/slides/slide{i}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
         );
     }
-    ct.push_str("<Default Extension=\\"png\\" ContentType=\\"image/png\\"/>");
+    ct.push_str("<Default Extension=\"png\" ContentType=\"image/png\"/>");
     ct.push_str("</Types>");
     parts.push(("[Content_Types].xml".into(), ct.into_bytes()));
 
