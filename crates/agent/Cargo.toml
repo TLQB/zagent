@@ -25,6 +25,7 @@ agent_servers.workspace = true
 agent_settings.workspace = true
 agent_skills.workspace = true
 anyhow.workspace = true
+base64.workspace = true
 calamine.workspace = true
 docx-rs.workspace = true
 pdf-extract.workspace = true
