@@ -286,9 +286,13 @@ impl AgentTool for GenerateImageTool {
                     error: e.to_string(),
                 })?;
             if !image_response.status().is_success() {
+                // Image WAS generated (quota spent); signed URL lasts ~7 days.
+                // 403 incident 10/3: Z.AI OSS AccessKey disabled - URL dead for
+                // everyone, revives when they restore the key. Surface the URL
+                // so the agent can still share it instead of swallowing it.
                 return Err(GenerateImageToolOutput::Error {
                     error: format!(
-                        "downloading the generated image failed: {}",
+                        "downloading the generated image failed: {} (image was generated successfully; upstream storage may be down - share this URL directly: {url})",
                         image_response.status()
                     ),
                 });
