@@ -205,10 +205,10 @@ fn enhance_topic(topic: String) -> String {
         return topic;
     }
     format!(
-        "{topic}\n\nPlease produce a complete presentation deck of 6 to 10 slides: \
-         a title slide, an agenda slide, well-developed content slides (3-5 concise \
+        "{topic}\n\nPlease produce a complete presentation deck of 4 to 6 slides: \
+         a title slide, well-developed content slides (2-4 concise \
          bullets each, each bullet a full concrete statement, not a bare keyword), \
-         and a closing summary slide."
+         and a closing summary slide. Keep each slide's HTML compact."
     )
 }
 
@@ -390,6 +390,7 @@ fn html_to_pptx_slides(deck: &SlideDeckEvent) -> Vec<slides_pptx::Slide> {
         .map(|slide| slides_pptx::Slide {
             title: strip_tags(&slide.title),
             bullets: extract_bullets(&slide.html),
+            image: None,
         })
         .collect()
 }

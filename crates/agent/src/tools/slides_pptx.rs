@@ -14,6 +14,10 @@ const SLIDE_H: u32 = 6_858_000;
 pub struct Slide {
     pub title: String,
     pub bullets: Vec<String>,
+    /// Full-bleed PNG rendered from the slide's HTML (design-preserving
+    /// mode). When present the picture covers the whole page; title/bullets
+    /// are ignored - they live inside the rendered pixels.
+    pub image: Option<Vec<u8>>,
 }
 
 pub fn build(slides: &[Slide], doc_title: &str) -> Vec<u8> {
@@ -37,6 +41,7 @@ pub fn build(slides: &[Slide], doc_title: &str) -> Vec<u8> {
             "<Override PartName=\"/ppt/slides/slide{i}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
         );
     }
+    ct.push_str("<Default Extension=\\"png\\" ContentType=\\"image/png\\"/>");
     ct.push_str("</Types>");
     parts.push(("[Content_Types].xml".into(), ct.into_bytes()));
 
@@ -134,12 +139,18 @@ pub fn build(slides: &[Slide], doc_title: &str) -> Vec<u8> {
             format!("ppt/slides/slide{n}.xml"),
             slide_xml(slide).into_bytes(),
         ));
-        parts.push((
-            format!("ppt/slides/_rels/slide{n}.xml.rels"),
-            br##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>"##
-                .to_vec(),
-        ));
+        let mut rels = String::from(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout\" Target=\"../slideLayouts/slideLayout1.xml\"/>",
+        );
+        if let Some(png) = &slide.image {
+            parts.push((format!("ppt/media/image{n}.png"), png.clone()));
+            let _ = write!(
+                rels,
+                "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"../media/image{n}.png\"/>"
+            );
+        }
+        rels.push_str("</Relationships>");
+        parts.push((format!("ppt/slides/_rels/slide{n}.xml.rels"), rels.into_bytes()));
     }
 
     let mut zip = ZipWriter::new();
@@ -150,6 +161,13 @@ pub fn build(slides: &[Slide], doc_title: &str) -> Vec<u8> {
 }
 
 fn slide_xml(slide: &Slide) -> String {
+    // Design-preserving slide: one full-bleed picture (rId2 = ../media png)
+    // covering the whole 16:9 page - rendered pixels carry the design.
+    if slide.image.is_some() {
+        return r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr><p:pic><p:nvPicPr><p:cNvPr id="2" name="Slide"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="6858000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>"##
+            .to_string();
+    }
     let mut body = String::new();
     for bullet in &slide.bullets {
         let _ = write!(
