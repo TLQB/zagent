@@ -205,7 +205,7 @@ fn text_box_xml(tb: &TextBox, id: usize) -> String {
     let w = (tb.w as i64) * 9525;
     let h = (tb.h as i64) * 9525;
     format!(
-        r##"<p:sp><p:nvSpPr><p:cNvPr id=\"{id}\" name=\"Text{id}\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"{x}\" y=\"{y}\"/><a:ext cx=\"{w}\" cy=\"{h}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr wrap=\"square\" lIns=\"0\" tIns=\"0\" rIns=\"0\" bIns=\"0\"/><a:lstStyle/>{paras}</p:txBody></p:sp>"##,
+        r##"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="Text{id}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{w}" cy="{h}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr wrap="square" lIns="0" tIns="0" rIns="0" bIns="0"/><a:lstStyle/>{paras}</p:txBody></p:sp>"##,
         id = id,
         x = x,
         y = y,
