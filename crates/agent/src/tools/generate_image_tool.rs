@@ -4,7 +4,7 @@ use crate::tools::slides_tool::first_worktree_dir;
 use crate::{AgentTool, ToolCallEventStream, ToolInput};
 use agent_client_protocol::schema::v1 as acp;
 use anyhow::Result;
-use futures::{AsyncReadExt, FutureExt as _};
+use futures::{AsyncBufReadExt, AsyncReadExt, FutureExt as _, StreamExt, io::BufReader};
 use gpui::{App, Entity, ImageFormat, Task};
 use http_client::{AsyncBody, HttpClient, HttpClientWithUrl, http};
 use language_model::{LanguageModelImage, LanguageModelImageExt, LanguageModelToolResultContent};
@@ -137,10 +137,14 @@ impl AgentTool for GenerateImageTool {
 
             event_stream.update_fields(acp::ToolCallUpdateFields::new().title("Generating image…"));
 
+            // stream:true — gateway trả SSE (heartbeat progress 15s + done/error).
+            // JSON mode bắt client chờ thụ động 87-117s không byte nào → tool
+            // card treo "Generating image…" mãi (issue 10/3).
             let body = serde_json::json!({
                 "prompt": input.prompt,
                 "size": input.size.clone().unwrap_or_else(|| "1024x1024".to_string()),
                 "n": 1,
+                "stream": true,
             })
             .to_string();
 
@@ -166,39 +170,81 @@ impl AgentTool for GenerateImageTool {
                 }
             };
 
-            let mut text = String::new();
-            response
-                .body_mut()
-                .read_to_string(&mut text)
-                .await
-                .map_err(|e| GenerateImageToolOutput::Error {
-                    error: e.to_string(),
-                })?;
-
             if !response.status().is_success() {
+                let mut err_text = String::new();
+                response
+                    .body_mut()
+                    .read_to_string(&mut err_text)
+                    .await
+                    .unwrap_or_default();
                 return Err(GenerateImageToolOutput::Error {
-                    error: format!("image generation failed: {} {}", response.status(), text),
+                    error: format!("image generation failed: {} {}", response.status(), err_text),
                 });
             }
 
-            let parsed: serde_json::Value =
-                serde_json::from_str(&text).map_err(|e| GenerateImageToolOutput::Error {
-                    error: format!("bad image response: {e}"),
+            #[derive(Debug, Deserialize)]
+            struct GeneratedImageRef {
+                url: String,
+                #[serde(default)]
+                ratio: String,
+                #[serde(default)]
+                resolution: String,
+            }
+
+            #[derive(Debug, Deserialize)]
+            #[serde(tag = "type", rename_all = "snake_case")]
+            enum ImageSseEvent {
+                Progress { elapsed_ms: Option<u64> },
+                Done { data: Vec<GeneratedImageRef> },
+                Error { error: String },
+            }
+
+            // Pattern consume SSE như collect_deck() của slides_tool.rs:
+            // heartbeat cho biết stream sống; gateway tự bảo đảm kết thúc
+            // (timeout 180s upstream → event error → [DONE]).
+            let reader = BufReader::new(response.into_body());
+            let mut lines = reader.lines();
+            let mut generated: Option<GeneratedImageRef> = None;
+            let mut last_error: Option<String> = None;
+            while let Some(line) = lines.next().await {
+                let line = line.map_err(|e| GenerateImageToolOutput::Error {
+                    error: e.to_string(),
                 })?;
-            let url = parsed["data"][0]["url"]
-                .as_str()
-                .ok_or_else(|| GenerateImageToolOutput::Error {
-                    error: format!("no image url in response: {text}"),
-                })?
-                .to_string();
-            let ratio = parsed["data"][0]["ratio"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
-            let resolution = parsed["data"][0]["resolution"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
+                let Some(payload) = line.strip_prefix("data: ") else {
+                    continue;
+                };
+                if payload == "[DONE]" {
+                    break;
+                }
+                match serde_json::from_str::<ImageSseEvent>(payload) {
+                    Ok(ImageSseEvent::Progress { elapsed_ms }) => {
+                        let secs = elapsed_ms.unwrap_or(0) / 1000;
+                        event_stream.update_fields(
+                            acp::ToolCallUpdateFields::new()
+                                .title(format!("Generating image… {secs}s")),
+                        );
+                    }
+                    Ok(ImageSseEvent::Done { data }) => {
+                        generated = data.into_iter().next();
+                    }
+                    Ok(ImageSseEvent::Error { error }) => {
+                        last_error = Some(error);
+                    }
+                    Err(error) => {
+                        log::debug!("unparsed image SSE event: {error}");
+                    }
+                }
+            }
+
+            if let Some(error) = last_error {
+                return Err(GenerateImageToolOutput::Error { error });
+            }
+            let image_ref = generated.ok_or_else(|| GenerateImageToolOutput::Error {
+                error: "no image url in response".to_string(),
+            })?;
+            let url = image_ref.url;
+            let ratio = image_ref.ratio;
+            let resolution = image_ref.resolution;
 
             event_stream.update_fields(acp::ToolCallUpdateFields::new().title("Saving image…"));
 
