@@ -482,6 +482,8 @@ async fn render_deck_images(
         wgt: i64,
         col: String,
         al: String,
+        #[serde(default)]
+        ff: String,
     }
     let parsed: RenderResponse = serde_json::from_str(&text).ok()?;
     let engine = base64::engine::general_purpose::STANDARD;
@@ -504,6 +506,7 @@ async fn render_deck_images(
                         bold: it.wgt >= 600,
                         color: it.col.clone(),
                         align: it.al.clone(),
+                        font: it.ff.clone(),
                     })
                     .collect()
             })

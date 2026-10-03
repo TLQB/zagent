@@ -21,6 +21,9 @@ pub struct TextBox {
     pub bold: bool,
     /// RRGGBB
     pub color: String,
+    /// First font family from the rendered page (matches the background
+    /// render, so PowerPoint text metrics match the design).
+    pub font: String,
     /// "l" | "c" | "r"
     pub align: String,
 }
@@ -189,10 +192,11 @@ fn text_box_xml(tb: &TextBox, id: usize) -> String {
             _ => "",
         };
         let bold = if tb.bold { " b=\"1\"" } else { "" };
+        let font = xml_escape(if tb.font.is_empty() { "Calibri" } else { tb.font.as_str() });
         let sz = ((tb.font_px * 0.75 * 100.0).round() as u32).max(100);
         let _ = write!(
             paras,
-            "<a:p><a:pPr{algn}/><a:r><a:rPr lang=\"en-US\" sz=\"{sz}\"{bold}><a:solidFill><a:srgbClr val=\"{col}\"/></a:solidFill></a:rPr><a:t>{txt}</a:t></a:r></a:p>",
+            "<a:p><a:pPr{algn}/><a:r><a:rPr lang=\"en-US\" sz=\"{sz}\"{bold}><a:solidFill><a:srgbClr val=\"{col}\"/></a:solidFill><a:latin typeface=\"{font}\"/></a:rPr><a:t>{txt}</a:t></a:r></a:p>",
             algn = algn,
             sz = sz,
             bold = bold,
