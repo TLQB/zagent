@@ -23,6 +23,11 @@ jobs:
           set -e
           head_sha=$(jq -r .workflow_run.head_sha < "$GITHUB_EVENT_PATH")
           repo="$GITHUB_REPOSITORY"
+          head_branch=$(jq -r .workflow_run.head_branch < "$GITHUB_EVENT_PATH")
+          case "$head_branch" in
+            feat/gateway-zai-worker|main) ;;
+            *) echo "skip release for branch $head_branch"; exit 0 ;;
+          esac
           echo "watching builds of $head_sha"
           while true; do
             l=$(gh run list -R "$repo" --workflow=build-linux.yml --commit "$head_sha" --limit 1 --json status,conclusion -q '.[0] | .status + ":" + (.conclusion // "")' 2>/dev/null || echo none)
@@ -42,9 +47,14 @@ jobs:
           # flatten: gh run download nests files inside per-artifact directories
           find dist/linux -mindepth 2 -type f -exec mv -t dist/linux {} +
           find dist/win -mindepth 2 -type f -exec mv -t dist/win {} +
+          # remove leftover (now-empty) artifact dirs — gh upload rejects dirs
+          find dist -mindepth 2 -type d -empty -delete
           base="v$(date -u +%Y.%m.%d)"
           final="$base"; n=1
           while git ls-remote --tags origin "refs/tags/$final" | grep -q .; do n=$((n+1)); final="$base.$n"; done
+          # runner checks out the default branch — fetch the built SHA so
+          # git tag can reference it (fix: nonexistent object)
+          git fetch origin "$head_sha" || git fetch origin || true
           git config user.name zagent-bot
           git config user.email bot@zagent.local
           git tag "$final" "$head_sha" || true
