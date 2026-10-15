@@ -1,10 +1,11 @@
-# Auto-release: waits for both build workflows of the same commit to succeed,
-# then tags the commit and publishes a GitHub release with both artifacts.
+# Auto-release: triggered exactly once per commit (Build Linux completion),
+# then waits for the other build workflows of the same commit before tagging
+# and publishing a GitHub release with every artifact.
 name: Create release
 
 on:
   workflow_run:
-    workflows: ["Build Linux", "Build Windows"]
+    workflows: ["Build Linux"]
     types: [completed]
 
 permissions:
@@ -13,7 +14,7 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 420
     steps:
       - uses: actions/checkout@v4
       - name: Wait for both builds, then tag + release
@@ -28,6 +29,12 @@ jobs:
             feat/gateway-zai-worker) ;;
             *) echo "skip release for branch $head_branch"; exit 0 ;;
           esac
+          # stale-guard: a newer commit on the branch supersedes this run
+          branch_head=$(git ls-remote origin "refs/heads/$head_branch" | cut -f1)
+          if [ -n "$branch_head" ] && [ "$branch_head" != "$head_sha" ]; then
+            echo "stale run (branch at $branch_head) - skip release"
+            exit 0
+          fi
           echo "watching builds of $head_sha"
           while true; do
             l=$(gh run list -R "$repo" --workflow=build-linux.yml --commit "$head_sha" --limit 1 --json status,conclusion -q '.[0] | .status + ":" + (.conclusion // "")' 2>/dev/null || echo none)
@@ -41,14 +48,39 @@ jobs:
           done
           linux_run=$(gh run list -R "$repo" --workflow=build-linux.yml --commit "$head_sha" --limit 1 --json databaseId -q '.[0].databaseId')
           win_run=$(gh run list -R "$repo" --workflow=build-windows.yml --commit "$head_sha" --limit 1 --json databaseId -q '.[0].databaseId')
+          # macOS is best-effort: wait up to ~3h for a run of this commit;
+          # a failure or a missing run releases without the DMG instead of
+          # blocking the two stable platforms.
+          mac_ok=0
+          mac_run=$(gh run list -R "$repo" --workflow=build-macos.yml --commit "$head_sha" --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)
+          if [ -n "$mac_run" ]; then
+            for i in $(seq 1 36); do
+              m=$(gh run view "$mac_run" -R "$repo" --json status,conclusion -q '.status + ":" + (.conclusion // "")' 2>/dev/null || echo none)
+              echo "$(date -u +%H:%M) macos=$m"
+              case "$m" in
+                completed:success) mac_ok=1; break ;;
+                completed:*) break ;;
+              esac
+              sleep 300
+            done
+          fi
           rm -rf dist && mkdir -p dist/linux dist/win
           gh run download "$linux_run" -R "$repo" -D dist/linux
           gh run download "$win_run" -R "$repo" -D dist/win
           # flatten: gh run download nests files inside per-artifact directories
           find dist/linux -mindepth 2 -type f -exec mv -t dist/linux {} +
           find dist/win -mindepth 2 -type f -exec mv -t dist/win {} +
-          # remove leftover (now-empty) artifact dirs — gh upload rejects dirs
-          find dist -mindepth 2 -type d -empty -delete
+          MAC_ASSETS=""
+          if [ "$mac_ok" = 1 ]; then
+            mkdir -p dist/mac
+            gh run download "$mac_run" -R "$repo" -D dist/mac
+            find dist/mac -mindepth 2 -type f -exec mv -t dist/mac {} +
+            # remove leftover (now-empty) artifact dirs — gh upload rejects dirs
+            find dist -mindepth 2 -type d -empty -delete
+            MAC_ASSETS="dist/mac/*"
+          else
+            echo "macOS build unavailable or failed — releasing without the DMG"
+          fi
           base="v$(date -u +%Y.%m.%d)"
           final="$base"; n=1
           while git ls-remote --tags origin "refs/tags/$final" | grep -q .; do n=$((n+1)); final="$base.$n"; done
@@ -60,8 +92,12 @@ jobs:
           git tag "$final" "$head_sha" || true
           git push origin "refs/tags/$final" || true
           if gh release view "$final" -R "$repo" >/dev/null 2>&1; then echo "release exists"; exit 0; fi
+          notes="Automated build of $head_sha. Includes: GLM vision (image input), Slides composer mode (native editable PPTX), generate_image tool, gateway worker integration (auth + auto-refresh)."
+          if [ "$mac_ok" = 1 ]; then
+            notes="$notes macOS build is unsigned — unblock with: xattr -cr /Applications/Zed.app"
+          fi
           gh release create "$final" -R "$repo" --target "$head_sha" \
             --title "zagent $final" \
-            --notes "Automated build of $head_sha. Includes: GLM vision (image input), Slides composer mode (native editable PPTX), generate_image tool, gateway worker integration (auth + auto-refresh)." \
-            dist/linux/* dist/win/* \
-            || gh release upload "$final" -R "$repo" dist/linux/* dist/win/*
+            --notes "$notes" \
+            dist/linux/* dist/win/* $MAC_ASSETS \
+            || gh release upload "$final" -R "$repo" dist/linux/* dist/win/* $MAC_ASSETS
