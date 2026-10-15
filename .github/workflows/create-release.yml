@@ -29,6 +29,12 @@ jobs:
             feat/gateway-zai-worker) ;;
             *) echo "skip release for branch $head_branch"; exit 0 ;;
           esac
+          # stale-guard: a newer commit on the branch supersedes this run
+          branch_head=$(git ls-remote origin "refs/heads/$head_branch" | cut -f1)
+          if [ -n "$branch_head" ] && [ "$branch_head" != "$head_sha" ]; then
+            echo "stale run (branch at $branch_head) - skip release"
+            exit 0
+          fi
           echo "watching builds of $head_sha"
           while true; do
             l=$(gh run list -R "$repo" --workflow=build-linux.yml --commit "$head_sha" --limit 1 --json status,conclusion -q '.[0] | .status + ":" + (.conclusion // "")' 2>/dev/null || echo none)
