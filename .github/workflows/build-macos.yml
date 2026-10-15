@@ -1,0 +1,62 @@
+name: Build MacOS
+
+on:
+  push:
+    branches: [feat/gateway-zai-worker]
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 300
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_STRIP: "symbols"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # `none` avoids installing an unused `stable`; the cargo/rustc proxies
+      # pull the toolchain pinned in rust-toolchain.toml instead.
+      - name: Install Rust toolchain
+        run: |
+          if [ ! -x "$HOME/.cargo/bin/rustup" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf \
+              --connect-timeout 30 --max-time 180 \
+              --retry 5 --retry-delay 5 --retry-connrefused \
+              https://sh.rustup.rs -o /tmp/rustup-init.sh
+            sh /tmp/rustup-init.sh -y --no-modify-path --profile minimal \
+              --default-toolchain none
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          rustc -vV
+          cargo --version
+
+      # wasmtime-c-api needs CMake; GH macOS images ship it — assert, don't
+      # pay for a full `brew install`.
+      - name: Verify build tools
+        run: cmake --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Upstream bundling script: cargo build + cargo-bundle (Zed fork) +
+      # hdiutil DMG. Unsigned (no certs in this repo) — users bypass
+      # Gatekeeper with `xattr -cr`.
+      - name: Build app bundle (unsigned)
+        run: ./script/bundle-mac aarch64-apple-darwin
+
+      - name: Rename artifact
+        run: |
+          ls -lah target/aarch64-apple-darwin/release/*.dmg
+          cp target/aarch64-apple-darwin/release/Zed-aarch64.dmg \
+             zagent-macos-aarch64.dmg
+          ls -lah zagent-macos-aarch64.dmg
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zagent-macos-aarch64
+          path: zagent-macos-aarch64.dmg
+          compression-level: 6
+          retention-days: 14
