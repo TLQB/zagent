@@ -25,7 +25,7 @@ jobs:
           repo="$GITHUB_REPOSITORY"
           head_branch=$(jq -r .workflow_run.head_branch < "$GITHUB_EVENT_PATH")
           case "$head_branch" in
-            feat/gateway-zai-worker|main) ;;
+            feat/gateway-zai-worker) ;;
             *) echo "skip release for branch $head_branch"; exit 0 ;;
           esac
           echo "watching builds of $head_sha"
