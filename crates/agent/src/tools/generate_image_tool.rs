@@ -15,7 +15,9 @@ use ui::prelude::*;
 use util::markdown::MarkdownInlineCode;
 
 /// Base URL of the gateway worker.
-const IMAGES_BASE_URL: &str = "https://zai-proxy-worker.tranlequybaotk12.workers.dev";
+fn images_base_url() -> String {
+    glm::worker_base_url().to_string()
+}
 /// Gateway bearer token (resolved by the glm crate: env vars
 /// ZAI_WORKER_EMAIL/ZAI_WORKER_PASSWORD, or fallback ZAGENT_GLM_API_KEY).
 async fn proxy_token(client: &dyn HttpClient) -> String {
@@ -150,7 +152,7 @@ impl AgentTool for GenerateImageTool {
 
             let request = http::Request::builder()
                 .method(http::Method::POST)
-                .uri(format!("{IMAGES_BASE_URL}/v1/images/generations"))
+                .uri(format!("{}/v1/images/generations", images_base_url()))
                 .header("Content-Type", "application/json")
                 .header("Authorization", format!("Bearer {}", proxy_token(http_client.as_ref()).await))
                 .body(AsyncBody::from(body))

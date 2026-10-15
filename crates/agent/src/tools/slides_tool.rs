@@ -21,8 +21,12 @@ use project::Project;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Base URL of the gateway worker.
-const SLIDES_BASE_URL: &str = "https://zai-proxy-worker.tranlequybaotk12.workers.dev";
+/// Base URL of the gateway worker — resolved by the glm crate (runtime
+/// setting → env ZAI_WORKER_URL → default), so slides follow the same
+/// gateway as chat.
+fn slides_base_url() -> String {
+    glm::worker_base_url().to_string()
+}
 /// Gateway bearer token (resolved by the glm crate: env vars
 /// ZAI_WORKER_EMAIL/ZAI_WORKER_PASSWORD, or fallback ZAGENT_GLM_API_KEY).
 async fn proxy_token(client: &dyn HttpClient) -> String {
@@ -316,7 +320,7 @@ async fn collect_deck(
 
     let request = http::Request::builder()
         .method(http::Method::POST)
-        .uri(format!("{SLIDES_BASE_URL}/v1/slides"))
+        .uri(format!("{}/v1/slides", slides_base_url()))
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", proxy_token(client.as_ref()).await))
         .body(AsyncBody::from(body))?;
@@ -460,7 +464,7 @@ async fn render_deck_images(
     .to_string();
     let request = http::Request::builder()
         .method(http::Method::POST)
-        .uri(format!("{SLIDES_BASE_URL}/v1/slides/render"))
+        .uri(format!("{}/v1/slides/render", slides_base_url()))
         .header("Content-Type", "application/json")
         .header(
             "Authorization",
