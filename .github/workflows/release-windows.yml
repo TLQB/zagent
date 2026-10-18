@@ -1,0 +1,109 @@
+# Windows-only release build for this fork.
+#
+# The upstream release.yml pipeline is gated on repository_owner ==
+# 'zed-industries' and depends on Namespace self-hosted runners, R2 sccache
+# and Azure code-signing — none of which exist on this fork. This workflow
+# builds a plain (unsigned) Windows installer straight from a tag using
+# GitHub-hosted runners, and publishes it as a GitHub Release.
+#
+# Trigger: push a tag starting with 'win-' (e.g. win-v2026.10.15):
+#   git tag win-v2026.10.15 <sha-with-the-feature> && git push origin win-v2026.10.15
+#
+# Reuses script/bundle-windows.ps1 (Inno Setup installer, both arches), with
+# ZED_RELEASE_CHANNEL=dev so no auto-update wiring is involved.
+name: release-windows
+
+on:
+  push:
+    tags:
+      - 'win-*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag or SHA to build (defaults to the branch the run is dispatched from)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  bundle_windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [x86_64, aarch64]
+    runs-on: windows-2022
+    timeout-minutes: 330
+    env:
+      CARGO_INCREMENTAL: 0
+      ZED_RELEASE_CHANNEL: dev
+      RELEASE_CHANNEL: dev
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          clean: false
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          check-latest: true
+
+      - name: Install Rust toolchain
+        run: rustup show
+        shell: pwsh
+
+      - name: Install cargo-about (license generation)
+        run: cargo install --locked cargo-about@0.8.2
+        shell: pwsh
+
+      - name: Build and bundle (${{ matrix.architecture }})
+        run: ./script/bundle-windows.ps1 -Architecture ${{ matrix.architecture }}
+        shell: pwsh
+        env:
+          CI: 'true'   # signing vars absent on purpose -> script skips signing
+
+      - name: Collect artifacts
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Copy-Item target/Zed-${{ matrix.architecture }}.exe dist/ -Force
+          Copy-Item target/zed-remote-server-windows-${{ matrix.architecture }}.zip dist/ -Force
+        shell: pwsh
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.architecture }}-${{ github.ref_name }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish_release:
+    needs: [bundle_windows]
+    # Tolerant: if one architecture fails, still publish whatever was built.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -e
+          FILES=$(find artifacts -type f)
+          if [ -z "$FILES" ]; then
+            echo "No artifacts to publish (all builds failed)"; exit 1
+          fi
+          gh release create "$TAG" --repo="$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --notes "Windows build (unsigned) of $TAG — includes the ZAI gateway provider with email/password sign-in. Auto-update is disabled (channel: dev)." \
+            $FILES || \
+          gh release upload "$TAG" --repo="$GITHUB_REPOSITORY" --clobber $FILES
