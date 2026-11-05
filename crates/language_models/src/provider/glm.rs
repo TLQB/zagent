@@ -257,31 +257,19 @@ let models: Vec<glm::Model> = entries
 
     // ── Settings-UI credentials ──────────────────────────────────────
 
-    /// Re-installs credentials saved in the OS keychain (written by a prior
-    /// sign-in) into the glm runtime so they are active in this session. The
-    /// credential is scoped to the configured endpoint: a cloud account must
-    /// never override the bearer for a local/self-hosted proxy.
-    fn restore_stored_credentials(&mut self, cx: &mut Context<Self>) {
-        // These globals are shared by every GLM model. Clear the previous
-        // endpoint's identity before looking up the current endpoint so a
-        // cloud login cannot leak into localhost (or vice versa). When no
-        // stored credential exists, gateway_token falls back to the
-        // endpoint-specific ZAGENT_GLM_API_KEY environment variable.
-        glm::set_runtime_token(None);
-        glm::set_runtime_login(None, None);
+    const GATEWAY_URL: &str = glm::GLM_API_URL;
 
+    /// Re-installs credentials saved in the OS keychain (written by a prior
+    /// sign-in) into the glm runtime so they are active in this session.
+    fn restore_stored_credentials(&mut self, cx: &mut Context<Self>) {
         let provider = self.credentials_provider.clone();
-        let url = GLMLanguageModelProvider::api_url(cx).to_string();
+        let url = Self::GATEWAY_URL.to_string();
         cx.spawn(async move |this, cx| {
             let Ok(Some((username, secret))) = provider.read_credentials(&url, cx).await else {
                 return;
             };
             let secret = String::from_utf8_lossy(&secret).to_string();
-            this.update(cx, |this, cx| {
-                this.apply_credentials(&username, &secret);
-                this.restart_fetch_models_task(cx);
-            })
-            .ok();
+            this.update(cx, |this, _| this.apply_credentials(&username, &secret)).ok();
         })
         .detach();
     }
@@ -310,7 +298,7 @@ let models: Vec<glm::Model> = entries
     ) -> Task<Result<()>> {
         self.apply_credentials(username, &secret);
         let provider = self.credentials_provider.clone();
-        let url = GLMLanguageModelProvider::api_url(cx).to_string();
+        let url = Self::GATEWAY_URL.to_string();
         let username = username.to_string();
         cx.spawn(async move |_, cx| {
             provider
@@ -343,7 +331,7 @@ let models: Vec<glm::Model> = entries
         self.fetched_models.clear();
         cx.notify();
         let provider = self.credentials_provider.clone();
-        let url = GLMLanguageModelProvider::api_url(cx).to_string();
+        let url = Self::GATEWAY_URL.to_string();
         cx.spawn(async move |_, cx| provider.delete_credentials(&url, cx).await)
     }
 }
@@ -659,7 +647,6 @@ impl GLMLanguageModelProvider {
                                     cx,
                                 );
                                 write_recover(&this.loading_progress).clear();
-                                this.restore_stored_credentials(cx);
                                 this.authenticate(cx).detach();
                             }
                             // Capability edits (supports_images/tools/thinking) are

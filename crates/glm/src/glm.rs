@@ -170,12 +170,18 @@ async fn login_refresh(
 /// Resolves the bearer token to send to the gateway worker at `base`.
 ///
 /// Resolution order:
-/// 1. Runtime credentials from the settings UI: account email + password →
+/// 1. For a custom/self-hosted base URL, `ZAGENT_GLM_API_KEY`. This prevents
+///    a cached cloud login from being sent to a local proxy.
+/// 2. Runtime credentials from the settings UI: account email + password →
 ///    auto-login + cache, otherwise the pre-issued token.
-/// 2. `ZAI_WORKER_EMAIL` + `ZAI_WORKER_PASSWORD` env vars → auto-login + cache.
-/// 3. `ZAGENT_GLM_API_KEY` (pre-issued bearer).
-/// 4. Empty string (worker rejects with 401, caller decides).
+/// 3. `ZAI_WORKER_EMAIL` + `ZAI_WORKER_PASSWORD` env vars → auto-login + cache.
+/// 4. `ZAGENT_GLM_API_KEY` (pre-issued bearer fallback for the default base).
+/// 5. Empty string (worker rejects with 401, caller decides).
 pub async fn gateway_token(client: &dyn HttpClient, base: &str) -> Result<String> {
+    let env_token = std::env::var("ZAGENT_GLM_API_KEY").ok();
+    if let Some(token) = custom_gateway_bearer(base, env_token) {
+        return Ok(token);
+    }
     // Fast path: a cached token from a prior login is still valid.
     if let Some(token) = cached_token_if_valid() {
         return Ok(token);
@@ -203,6 +209,15 @@ pub async fn gateway_token(client: &dyn HttpClient, base: &str) -> Result<String
         return login_refresh(client, base, &email, &password).await;
     }
     Ok(std::env::var("ZAGENT_GLM_API_KEY").unwrap_or_default())
+}
+
+fn custom_gateway_bearer(base: &str, env_token: Option<String>) -> Option<String> {
+    let base = base.trim_end_matches('/');
+    let default_base = GLM_API_URL.trim_end_matches('/');
+    if base == default_base {
+        return None;
+    }
+    env_token.filter(|token| !token.is_empty())
 }
 
 /// A model exposed to the rest of Zed, after merging API discovery with
@@ -769,4 +784,29 @@ pub async fn get_models(
         return Ok(response.data);
     }
     anyhow::bail!("gateway auth failed after retry");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GLM_API_URL, custom_gateway_bearer};
+
+    #[test]
+    fn custom_gateway_prefers_explicit_bearer() {
+        assert_eq!(
+            custom_gateway_bearer("http://127.0.0.1:3001", Some("local-token".to_string())),
+            Some("local-token".to_string())
+        );
+        assert_eq!(
+            custom_gateway_bearer(GLM_API_URL, Some("local-token".to_string())),
+            None
+        );
+        assert_eq!(
+            custom_gateway_bearer(&format!("{GLM_API_URL}/"), Some("local-token".to_string())),
+            None
+        );
+        assert_eq!(
+            custom_gateway_bearer("http://127.0.0.1:3001", Some(String::new())),
+            None
+        );
+    }
 }
