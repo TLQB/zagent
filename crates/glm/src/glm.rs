@@ -892,4 +892,24 @@ mod tests {
         assert_eq!(entry.supports_thinking_hint(), None);
         assert!(entry.effort_levels_hint().is_empty());
     }
+
+    /// Decodes a LIVE capture from the zagent-proxy `/v1/models` endpoint
+    /// (checked in as a fixture) to prove the decoder stays in step with the
+    /// real payload the editor receives.
+    #[test]
+    fn decodes_live_proxy_models_capture() {
+        let body = include_str!("../tests/fixtures/proxy_models.json");
+        let parsed: super::ListModelsResponse =
+            serde_json::from_str(body).expect("decode live capture");
+        assert!(!parsed.data.is_empty());
+
+        let flash = parsed
+            .data
+            .iter()
+            .find(|m| m.id == "x-preview-l")
+            .expect("x-preview-l present in the live capture");
+        assert_eq!(flash.supports_thinking_hint(), Some(true));
+        assert!(flash.supports_images_hint());
+        assert_eq!(flash.effort_levels_hint(), ["low", "high", "max"]);
+    }
 }
