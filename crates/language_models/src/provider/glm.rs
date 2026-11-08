@@ -867,8 +867,8 @@ impl GLMLanguageModel {
     fn capabilities(&self) -> LiveCapabilities {
         read_recover(&self.capability_cells)
             .get(&self.name)
-            .copied()
-            .unwrap_or(self.fallback_capabilities)
+            .cloned()
+            .unwrap_or_else(|| self.fallback_capabilities.clone())
     }
 
     fn loading_label(&self) -> Option<SharedString> {
@@ -1400,6 +1400,7 @@ fn merge_settings_into_models(
                     supports_tools: setting_model.supports_tools.unwrap_or(false),
                     supports_images: setting_model.supports_images.unwrap_or(false),
                     supports_thinking: setting_model.supports_thinking.unwrap_or(false),
+                    effort_levels: Vec::new(),
                 },
             );
         }
