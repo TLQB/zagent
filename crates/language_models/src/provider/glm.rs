@@ -49,6 +49,12 @@ const REASONING_EFFORT_MODELS: &[(&str, &[(&str, &str)], &str)] = &[
     ("glm-5.3-flash", &[("low", "Low"), ("high", "High")], "high"),
     ("glm-5.3", &[("low", "Low"), ("high", "High"), ("max", "Max")], "high"),
     ("glm-5.2", &[("high", "High"), ("max", "Max")], "high"),
+    // zagent-proxy publishes the GLM-5.3 Flash catalogue entry under
+    // `x-preview-l` (display name "GLM-5.3-Flash") and serves the flash model
+    // behind that id. Auto-discovery therefore adds `x-preview-l` to the model
+    // list, and without this entry that model would lose its thinking/effort
+    // controls (supports_thinking is derived from this table too).
+    ("x-preview-l", &[("low", "Low"), ("high", "High")], "high"),
 ];
 
 /// Built-in GLM models always shown in the provider's model list, even when
