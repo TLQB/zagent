@@ -231,6 +231,11 @@ pub struct Model {
     pub supports_tools: bool,
     pub supports_images: bool,
     pub supports_thinking: bool,
+    /// Reasoning-effort tiers the server published for this model, in the
+    /// server's own order (e.g. `["low","high","max"]`). Empty when the
+    /// server did not report any, so the provider falls back to its table.
+    #[serde(default)]
+    pub effort_levels: Vec<String>,
 }
 
 impl Model {
@@ -249,7 +254,14 @@ impl Model {
             supports_tools,
             supports_images,
             supports_thinking,
+            effort_levels: Vec::new(),
         }
+    }
+
+    /// Sets the server-reported reasoning-effort tiers (builder form).
+    pub fn with_effort_levels(mut self, levels: Vec<String>) -> Self {
+        self.effort_levels = levels;
+        self
     }
 
     pub fn display_name(&self) -> &str {
@@ -483,6 +495,11 @@ pub struct ModelEntry {
     /// `vision`) instead of an `architecture` section.
     #[serde(default)]
     pub capabilities: Option<ModelCapabilities>,
+    /// Reasoning-effort tiers the model accepts, published by the zagent-proxy
+    /// sidecar (e.g. `["low","high","max"]`). Empty when the server omits it,
+    /// in which case the editor falls back to its built-in table.
+    #[serde(default)]
+    pub reasoning_effort_levels: Vec<String>,
 }
 
 impl ModelEntry {
@@ -520,6 +537,21 @@ impl ModelEntry {
                 .as_ref()
                 .is_some_and(|capabilities| capabilities.vision == Some(true))
     }
+
+    /// Whether the server advertises extended thinking for this model
+    /// (`capabilities.think`). `None` when the server does not report it, so
+    /// the caller can fall back to its built-in table.
+    pub fn supports_thinking_hint(&self) -> Option<bool> {
+        self.capabilities
+            .as_ref()
+            .and_then(|capabilities| capabilities.think)
+    }
+
+    /// The reasoning-effort tiers the server reports, or an empty slice when
+    /// it does not publish any.
+    pub fn effort_levels_hint(&self) -> &[String] {
+        &self.reasoning_effort_levels
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -540,11 +572,19 @@ pub struct Architecture {
 
 /// Capability flags from the sidecar `/models` payload; unknown keys are
 /// ignored by serde.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct ModelCapabilities {
     /// Whether the model accepts image input.
     #[serde(default)]
     pub vision: Option<bool>,
+    /// Whether the model supports extended thinking (`capabilities.think`).
+    /// The zagent-proxy sidecar reports this so the editor can show thinking
+    /// controls without hardcoding a model list.
+    #[serde(default)]
+    pub think: Option<bool>,
+    /// Whether the model accepts a `reasoning_effort` parameter.
+    #[serde(default)]
+    pub reasoning_effort: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -808,5 +848,48 @@ mod tests {
             custom_gateway_bearer("http://127.0.0.1:3001", Some(String::new())),
             None
         );
+    }
+
+    /// The zagent-proxy `/v1/models` payload carries capability flags and the
+    /// reasoning-effort tiers; the decoder must surface them (they were being
+    /// silently dropped, which stripped the thinking/effort controls).
+    #[test]
+    fn parses_sidecar_capabilities_and_effort_levels() {
+        let body = r#"{
+            "object": "list",
+            "data": [{
+                "id": "x-preview-l",
+                "display_name": "GLM-5.3-Flash",
+                "architecture": {"input_modalities": ["text","image"]},
+                "capabilities": {"think": true, "reasoning_effort": true, "vision": true},
+                "reasoning_effort_levels": ["low","high","max"]
+            }, {
+                "id": "glm-5.2",
+                "capabilities": {"think": true, "vision": false}
+            }]
+        }"#;
+        let parsed: super::ListModelsResponse = serde_json::from_str(body).expect("decode");
+        assert_eq!(parsed.data.len(), 2);
+
+        let flash = &parsed.data[0];
+        assert_eq!(flash.supports_thinking_hint(), Some(true));
+        assert!(flash.supports_images_hint());
+        assert_eq!(flash.effort_levels_hint(), ["low", "high", "max"]);
+
+        let glm52 = &parsed.data[1];
+        assert_eq!(glm52.supports_thinking_hint(), Some(true));
+        assert!(!glm52.supports_images_hint());
+        assert!(glm52.effort_levels_hint().is_empty());
+    }
+
+    /// When the server omits capabilities entirely, the hints are `None` so the
+    /// provider can fall back to its table instead of assuming "no thinking".
+    #[test]
+    fn absent_capabilities_yield_none_hints() {
+        let body = r#"{"data":[{"id":"glm-5.3"}]}"#;
+        let parsed: super::ListModelsResponse = serde_json::from_str(body).expect("decode");
+        let entry = &parsed.data[0];
+        assert_eq!(entry.supports_thinking_hint(), None);
+        assert!(entry.effort_levels_hint().is_empty());
     }
 }

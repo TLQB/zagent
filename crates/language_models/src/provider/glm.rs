@@ -80,6 +80,34 @@ fn model_supports_reasoning_effort(model_name: &str) -> bool {
     reasoning_effort_config(model_name).is_some()
 }
 
+/// Human label for a reasoning-effort value (e.g. `max` -> "Max").
+fn effort_label(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Builds effort levels from the server-reported tier list. The default tier
+/// is the table default when it is present in the server list, otherwise the
+/// first reported tier (the server's own ordering starts at the cheapest).
+fn effort_levels_from_server(levels: &[String], default: Option<&str>) -> Vec<LanguageModelEffortLevel> {
+    let default = default.filter(|d| levels.iter().any(|v| v == d));
+    levels
+        .iter()
+        .enumerate()
+        .map(|(index, value)| LanguageModelEffortLevel {
+            name: effort_label(value).into(),
+            value: value.as_str().into(),
+            is_default: match default {
+                Some(d) => value == d,
+                None => index == 0,
+            },
+        })
+        .collect()
+}
+
 fn supported_effort_levels_for(model_name: &str) -> Vec<LanguageModelEffortLevel> {
     let Some((_, levels, default)) = reasoning_effort_config(model_name) else {
         return Vec::new();
@@ -97,18 +125,28 @@ fn supported_effort_levels_for(model_name: &str) -> Vec<LanguageModelEffortLevel
 fn resolve_reasoning_effort(
     request: &LanguageModelRequest,
     model_name: &str,
+    server_levels: &[String],
 ) -> Option<String> {
-    let (_, levels, default) = reasoning_effort_config(model_name)?;
-
     if !request.thinking_allowed {
         return None;
     }
 
+    // Accept a value that either the server published or the table lists, so a
+    // tier the proxy added (e.g. `max` for x-preview-l) is not silently
+    // dropped back to the default.
+    let table = reasoning_effort_config(model_name);
+    let default: Option<&str> = table.map(|(_, _, default)| *default);
+    let allowed = |value: &str| {
+        server_levels.iter().any(|v| v == value)
+            || table.is_some_and(|(_, levels, _)| levels.iter().any(|(v, _)| *v == value))
+    };
+
     let chosen = request
         .thinking_effort
         .as_deref()
-        .filter(|effort| levels.iter().any(|(v, _)| *v == *effort))
-        .unwrap_or(default);
+        .filter(|effort| allowed(effort))
+        .or(default)
+        .or_else(|| server_levels.first().map(String::as_str))?;
 
     Some(chosen.to_string())
 }
@@ -520,11 +558,26 @@ impl Render for ConfigurationView {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct LiveCapabilities {
     max_tokens: u64,
     supports_tools: bool,
     supports_thinking: bool,
+    /// Reasoning-effort tiers the server published for this model, in the
+    /// server's order (e.g. `["low","high","max"]`). Empty means "not
+    /// reported" — the provider then falls back to its built-in table.
+    effort_levels: Vec<String>,
+}
+
+impl Default for LiveCapabilities {
+    fn default() -> Self {
+        Self {
+            max_tokens: 0,
+            supports_tools: false,
+            supports_thinking: false,
+            effort_levels: Vec::new(),
+        }
+    }
 }
 
 impl LiveCapabilities {
@@ -533,6 +586,7 @@ impl LiveCapabilities {
             max_tokens: model.max_tokens,
             supports_tools: model.supports_tools,
             supports_thinking: model.supports_thinking,
+            effort_levels: model.effort_levels.clone(),
         }
     }
 }
@@ -601,7 +655,12 @@ fn model_from_entry(entry: &ModelEntry, _props: Option<&()>) -> glm::Model {
         .unwrap_or(ASSUMED_UNLOADED_CONTEXT);
     let supports_tools = !entry.is_loaded();
     let supports_images = entry.supports_images_hint();
-    let supports_thinking = false; // or whatever default makes sense
+    // Prefer the server's own capability flags. The zagent-proxy sidecar
+    // reports `capabilities.think` / `capabilities.reasoning_effort` and the
+    // tiers in `reasoning_effort_levels`; hardcoding `false` here silently
+    // stripped the thinking/effort controls from every discovered model.
+    let supports_thinking = entry.supports_thinking_hint().unwrap_or(false);
+    let effort_levels = entry.effort_levels_hint().to_vec();
 
     glm::Model::new(
         &entry.id,
@@ -611,6 +670,7 @@ fn model_from_entry(entry: &ModelEntry, _props: Option<&()>) -> glm::Model {
         supports_images,
         supports_thinking,
     )
+    .with_effort_levels(effort_levels)
 }
 
 fn display_name_for(id: &str) -> String {
@@ -872,9 +932,9 @@ fn build_glm_request(
     }
 
     let supports_tools = capabilities.supports_tools;
-    let supports_thinking =
-        capabilities.supports_thinking || model_supports_reasoning_effort(model_name);    let mut messages = Vec::new();
-    let reasoning_effort = resolve_reasoning_effort(&request, model_name);
+    let supports_thinking = capabilities.supports_thinking || model_supports_reasoning_effort(model_name);
+    let mut messages = Vec::new();
+    let reasoning_effort = resolve_reasoning_effort(&request, model_name, &capabilities.effort_levels);
 
     for message in request.messages {
         let mut reasoning_content: Option<String> = None;
@@ -1080,8 +1140,17 @@ impl LanguageModel for GLMLanguageModel {
         self.capabilities().supports_thinking
             || model_supports_reasoning_effort(&self.name)
     }
-    
+
     fn supported_effort_levels(&self) -> Vec<LanguageModelEffortLevel> {
+        // Prefer the tiers the server published for this model; fall back to
+        // the built-in table only when the server reported none. This keeps
+        // the picker in step with the proxy instead of a hardcoded list that
+        // drifts (e.g. x-preview-l gained a `max` tier upstream).
+        let server_levels = self.capabilities().effort_levels;
+        if !server_levels.is_empty() {
+            let default = reasoning_effort_config(&self.name).map(|(_, _, default)| *default);
+            return effort_levels_from_server(&server_levels, default);
+        }
         supported_effort_levels_for(&self.name)
     }
 
