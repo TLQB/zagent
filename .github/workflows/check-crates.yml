@@ -7,6 +7,7 @@ on:
       - "crates/glm/**"
       - "crates/language_models/**"
       - "crates/agent/**"
+      - "crates/agent_ui/**"
       - "crates/sidebar/**"
       - "crates/zed_actions/**"
       - "Cargo.toml"
@@ -51,4 +52,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: cargo check
-        run: cargo check -p glm -p language_models -p agent -p zed_actions -p sidebar --all-targets
+        run: cargo check -p glm -p language_models -p agent -p agent_ui -p zed_actions -p sidebar --all-targets
+
+      - name: Test external directory mentions
+        run: cargo test -p agent_ui test_paste_directory_outside_project_adds_accessible_worktree --lib

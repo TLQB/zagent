@@ -361,7 +361,9 @@ async fn resolve_pasted_context_items(
                     let path = path.clone();
                     let Ok(resolve_task) = cx.update({
                         let project = project.clone();
-                        move |_, cx| Workspace::project_path_for_path(project, &path, false, cx)
+                        // Directory mentions must remain available to agent tools after
+                        // the paste task releases its temporary worktree handle.
+                        move |_, cx| Workspace::project_path_for_path(project, &path, true, cx)
                     }) else {
                         continue;
                     };
@@ -5192,6 +5194,41 @@ mod tests {
                 abs_path: path!("/project/src").into(),
             }
         );
+    }
+
+    #[gpui::test]
+    async fn test_paste_directory_outside_project_adds_accessible_worktree(
+        cx: &mut TestAppContext,
+    ) {
+        init_test(cx);
+        let (message_editor, _, mut cx) =
+            setup_paste_test_message_editor(json!({"main.rs": "fn main() {}"}), cx).await;
+        let project = message_editor.read_with(&cx, |editor, _| {
+            editor.project.upgrade().expect("project should exist")
+        });
+        let external_path = path!("/external/PoC");
+        let fs = project.read_with(&cx, |project, _| project.fs().clone());
+        fs.as_fake()
+            .insert_tree(external_path, json!({"README.md": "PoC project"}))
+            .await;
+
+        paste_external_paths(&message_editor, vec![PathBuf::from(external_path)], &mut cx);
+
+        let contents = mention_contents(&message_editor, &mut cx).await;
+        assert!(matches!(
+            contents.as_slice(),
+            [(MentionUri::Directory { abs_path }, Mention::Link)]
+                if abs_path.as_path() == std::path::Path::new(external_path)
+        ));
+        project.read_with(&cx, |project, cx| {
+            let worktree = project
+                .visible_worktrees(cx)
+                .find(|worktree| {
+                    worktree.read(cx).abs_path() == std::path::Path::new(external_path)
+                })
+                .expect("external directory must remain available to agent tools");
+            assert!(worktree.read(cx).is_visible());
+        });
     }
 
     #[gpui::test]
