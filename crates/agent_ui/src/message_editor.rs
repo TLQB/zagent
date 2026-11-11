@@ -5230,7 +5230,7 @@ mod tests {
             let worktree = project
                 .visible_worktrees(cx)
                 .find(|worktree| {
-                    worktree.read(cx).abs_path() == std::path::Path::new(external_path)
+                    worktree.read(cx).abs_path().as_ref() == std::path::Path::new(external_path)
                 })
                 .expect("external directory must remain available to agent tools");
             assert!(worktree.read(cx).is_visible());
