@@ -5203,8 +5203,14 @@ mod tests {
         init_test(cx);
         let (message_editor, _, mut cx) =
             setup_paste_test_message_editor(json!({"main.rs": "fn main() {}"}), cx).await;
-        let project = message_editor.read_with(&cx, |editor, _| {
-            editor.project.upgrade().expect("project should exist")
+        let project = message_editor.read_with(&cx, |editor, cx| {
+            editor
+                .workspace
+                .upgrade()
+                .expect("workspace should exist")
+                .read(cx)
+                .project()
+                .clone()
         });
         let external_path = path!("/external/PoC");
         let fs = project.read_with(&cx, |project, _| project.fs().clone());
