@@ -6381,7 +6381,7 @@ impl AgentPanel {
         let tasks = paths
             .paths()
             .iter()
-            .map(|path| Workspace::project_path_for_path(self.project.clone(), path, false, cx))
+            .map(|path| Workspace::project_path_for_path(self.project.clone(), path, true, cx))
             .collect::<Vec<_>>();
         cx.spawn_in(window, async move |_this, cx| {
             let mut paths = vec![];
@@ -9595,6 +9595,29 @@ mod tests {
         let expected_text = format!("[@file.txt]({expected_uri}) ");
         let actual_text = panel.read_with(&cx, |panel, cx| panel.editor_text(thread_id, cx));
         assert_eq!(actual_text.as_deref(), Some(expected_text.as_str()));
+    }
+
+    #[gpui::test]
+    async fn test_external_directory_drop_stays_available_to_agent_tools(cx: &mut TestAppContext) {
+        let (panel, mut cx) = setup_panel(cx).await;
+        let project = panel.read_with(&cx, |panel, _| panel.project.clone());
+        let fs = project.read_with(&cx, |project, _| project.fs().clone());
+        fs.as_fake()
+            .insert_tree("/external/PoC", json!({"README.md": "PoC project"}))
+            .await;
+        open_thread_with_connection(&panel, StubAgentConnection::new(), &mut cx);
+
+        panel.update_in(&mut cx, |panel, window, cx| {
+            let paths = ExternalPaths(vec![PathBuf::from("/external/PoC")].into());
+            panel.handle_external_paths_drop(&paths, window, cx);
+        });
+        cx.run_until_parked();
+
+        project.read_with(&cx, |project, cx| {
+            assert!(project.visible_worktrees(cx).any(|worktree| {
+                worktree.read(cx).abs_path().as_ref() == Path::new("/external/PoC")
+            }));
+        });
     }
 
     #[gpui::test]

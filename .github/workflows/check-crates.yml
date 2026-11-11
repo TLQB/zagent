@@ -56,3 +56,6 @@ jobs:
 
       - name: Test external directory mentions
         run: cargo test -p agent_ui test_paste_directory_outside_project_adds_accessible_worktree --lib
+
+      - name: Test external directory drops
+        run: cargo test -p agent_ui test_external_directory_drop_stays_available_to_agent_tools --lib
