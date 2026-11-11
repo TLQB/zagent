@@ -57,11 +57,10 @@ const REASONING_EFFORT_MODELS: &[(&str, &[(&str, &str)], &str)] = &[
     ("x-preview-l", &[("low", "Low"), ("high", "High")], "high"),
 ];
 
-/// Built-in GLM models always shown in the provider's model list, even when
-/// auto-discovery doesn't report them. Auto-discovered entries and user-configured
-/// available_models override these defaults.
+/// Built-in GLM models shown before discovery succeeds or when discovery is off.
+/// Once a server returns its catalog, the picker uses only served model IDs.
 const DEFAULT_MODELS: &[(&str, &str, u64)] = &[
-    ("glm-5.3-flash", "GLM-5.3 Flash", 131_072),
+    ("x-preview-l", "GLM Flash (x-preview-l)", 131_072),
     ("glm-5.3", "GLM-5.3", 131_072),
     ("glm-5.2", "GLM-5.2", 131_072),
 ];
@@ -301,19 +300,22 @@ let models: Vec<glm::Model> = entries
 
     // ── Settings-UI credentials ──────────────────────────────────────
 
-    const GATEWAY_URL: &str = glm::GLM_API_URL;
-
     /// Re-installs credentials saved in the OS keychain (written by a prior
     /// sign-in) into the glm runtime so they are active in this session.
     fn restore_stored_credentials(&mut self, cx: &mut Context<Self>) {
         let provider = self.credentials_provider.clone();
-        let url = Self::GATEWAY_URL.to_string();
+        let url = GLMLanguageModelProvider::api_url(cx).to_string();
         cx.spawn(async move |this, cx| {
             let Ok(Some((username, secret))) = provider.read_credentials(&url, cx).await else {
                 return;
             };
             let secret = String::from_utf8_lossy(&secret).to_string();
-            this.update(cx, |this, _| this.apply_credentials(&username, &secret)).ok();
+            this.update(cx, |this, cx| {
+                if GLMLanguageModelProvider::api_url(cx).to_string() == url {
+                    this.apply_credentials(&username, &secret);
+                    this.restart_fetch_models_task(cx);
+                }
+            }).ok();
         })
         .detach();
     }
@@ -342,7 +344,7 @@ let models: Vec<glm::Model> = entries
     ) -> Task<Result<()>> {
         self.apply_credentials(username, &secret);
         let provider = self.credentials_provider.clone();
-        let url = Self::GATEWAY_URL.to_string();
+        let url = GLMLanguageModelProvider::api_url(cx).to_string();
         let username = username.to_string();
         cx.spawn(async move |_, cx| {
             provider
@@ -359,13 +361,17 @@ let models: Vec<glm::Model> = entries
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
         let http_client = self.http_client.clone();
+        let api_url = GLMLanguageModelProvider::api_url(cx).to_string();
         cx.spawn(async move |this, cx| {
             let result =
-                glm::sign_in_with_password(http_client.as_ref(), &email, &password).await;
+                glm::sign_in_with_password(http_client.as_ref(), &api_url, &email, &password).await;
+            result?;
             this.update(cx, |this, cx| {
-                this.fetch_models(cx).detach();
+                if GLMLanguageModelProvider::api_url(cx).to_string() == api_url {
+                    this.fetch_models(cx).detach();
+                }
             })?;
-            result.map(|_| ())
+            Ok(())
         })
     }
 
@@ -375,7 +381,7 @@ let models: Vec<glm::Model> = entries
         self.fetched_models.clear();
         cx.notify();
         let provider = self.credentials_provider.clone();
-        let url = Self::GATEWAY_URL.to_string();
+        let url = GLMLanguageModelProvider::api_url(cx).to_string();
         cx.spawn(async move |_, cx| provider.delete_credentials(&url, cx).await)
     }
 }
@@ -437,22 +443,21 @@ impl ConfigurationView {
         }
         self.error = None;
         self.signing_in = true;
-        let task = self.state.update(cx, |state, cx| {
-            state.save_credentials(
-                "account",
-                format!("{email}:{password}"),
-                cx,
-            )
+        let api_url = GLMLanguageModelProvider::api_url(cx).to_string();
+        let sign_in = self.state.update(cx, |state, cx| {
+            state.sign_in_with_password(email.clone(), password.clone(), cx)
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = async {
-                task.await?;
-                let sign_in = this.update(cx, |this, cx| {
+                sign_in.await?;
+                let current_url = this.update(cx, |_, cx| GLMLanguageModelProvider::api_url(cx).to_string())?;
+                anyhow::ensure!(current_url == api_url, "Gateway changed during sign-in");
+                let save = this.update(cx, |this, cx| {
                     this.state.update(cx, |state, cx| {
-                        state.sign_in_with_password(email.clone(), password.clone(), cx)
+                        state.save_credentials("account", format!("{email}:{password}"), cx)
                     })
                 })?;
-                sign_in.await?;
+                save.await?;
                 this.update(cx, |this, cx| {
                     this.signing_in = false;
                     cx.notify();
@@ -617,24 +622,26 @@ fn compute_effective_models(
             models.insert(model.name.clone(), model);
         }
     }
-    // Always include built-in GLM models so they appear in the picker even
-    // when auto-discovery hasn't reported them. Entries already in the map
-    // (from auto-discover) and user-configured models (merged next) take
-    // precedence over these defaults.
-    for (name, display_name, max_tokens) in DEFAULT_MODELS {
-        models.entry((*name).to_string()).or_insert(glm::Model::new(
-            name,
-            Some(display_name),
-            Some(*max_tokens),
-            true,
-            false,
-            true,
-        ));
+    // Do not advertise a model the selected gateway did not return. In
+    // particular, free accounts must not see paid models, and the local proxy
+    // must not show stale model IDs from an older cloud configuration.
+    if !settings.auto_discover || fetched_models.is_empty() {
+        for (name, display_name, max_tokens) in DEFAULT_MODELS {
+            models.entry((*name).to_string()).or_insert(glm::Model::new(
+                name,
+                Some(display_name),
+                Some(*max_tokens),
+                true,
+                false,
+                true,
+            ));
+        }
     }
     merge_settings_into_models(
         &mut models,
         &settings.available_models,
         settings.context_window,
+        !settings.auto_discover || fetched_models.is_empty(),
     );
     models
 }
@@ -706,6 +713,7 @@ impl GLMLanguageModelProvider {
                             if url_changed {
                                 let credentials_provider = this.credentials_provider.clone();
                                 let api_url = Self::api_url(cx);
+                                glm::set_runtime_base_url(Some(api_url.to_string()));
                                 this.api_key_state.handle_url_change(
                                     api_url,
                                     |this| &mut this.api_key_state,
@@ -713,6 +721,7 @@ impl GLMLanguageModelProvider {
                                     cx,
                                 );
                                 write_recover(&this.loading_progress).clear();
+                                this.restore_stored_credentials(cx);
                                 this.authenticate(cx).detach();
                             }
                             // Capability edits (supports_images/tools/thinking) are
@@ -740,6 +749,7 @@ impl GLMLanguageModelProvider {
             }),
         };
         this.state.update(cx, |state, cx| {
+            glm::set_runtime_base_url(Some(Self::api_url(cx).to_string()));
             state.restore_stored_credentials(cx);
             state.restart_fetch_models_task(cx);
         });
@@ -753,7 +763,11 @@ impl GLMLanguageModelProvider {
     fn api_url(cx: &App) -> SharedString {
         let api_url = &Self::settings(cx).api_url;
         if api_url.is_empty() {
-            GLM_API_URL.into()
+            std::env::var("ZAI_WORKER_URL")
+                .ok()
+                .filter(|url| !url.is_empty())
+                .unwrap_or_else(|| GLM_API_URL.to_string())
+                .into()
         } else {
             SharedString::new(api_url.as_str())
         }
@@ -832,7 +846,7 @@ impl LanguageModelProvider for GLMLanguageModelProvider {
         Some(ProviderSettingsView::Inline(InlineProviderSettings {
             title: None,
             description: Some(InlineDescription::Text(
-                "Sign in to the Z.AI gateway worker with a token, or with your account email and password."
+                "Use a cloud gateway account, or paste a Bearer token for the selected gateway or local proxy."
                     .into(),
             )),
             create_view: Arc::new({
@@ -1372,6 +1386,7 @@ fn merge_settings_into_models(
     models: &mut HashMap<String, glm::Model>,
     available_models: &[AvailableModel],
     context_window: Option<u64>,
+    allow_new: bool,
 ) {
     for setting_model in available_models {
         if let Some(model) = models.get_mut(&setting_model.name) {
@@ -1390,7 +1405,7 @@ fn merge_settings_into_models(
             if let Some(supports_thinking) = setting_model.supports_thinking {
                 model.supports_thinking = supports_thinking;
             }
-        } else {
+        } else if allow_new {
             models.insert(
                 setting_model.name.clone(),
                 glm::Model {
@@ -1404,5 +1419,37 @@ fn merge_settings_into_models(
                 },
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AvailableModel, GLMSettings, compute_effective_models};
+
+    #[test]
+    fn discovered_catalog_excludes_unavailable_defaults_and_old_overrides() {
+        let fetched = vec![glm::Model::new(
+            "x-preview-l",
+            Some("GLM Flash"),
+            Some(131_072),
+            true,
+            true,
+            true,
+        )];
+        let settings = GLMSettings {
+            auto_discover: true,
+            available_models: vec![AvailableModel {
+                name: "glm-5.3-flash".to_string(),
+                display_name: None,
+                max_tokens: 131_072,
+                supports_tools: Some(true),
+                supports_images: None,
+                supports_thinking: None,
+            }],
+            ..Default::default()
+        };
+        let effective = compute_effective_models(&fetched, &settings);
+        assert_eq!(effective.len(), 1);
+        assert!(effective.contains_key("x-preview-l"));
     }
 }

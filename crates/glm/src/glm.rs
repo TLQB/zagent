@@ -13,8 +13,8 @@ const DEFAULT_CONTEXT_LENGTH: u64 = 4096;
 
 // ── Gateway worker authentication ──────────────────────────────────
 // The Cloudflare worker gateway authenticates `/v1/*` requests with a
-// short-lived HS256 JWT issued by `POST /auth/login`. The token expires
-// after 24 hours, so we cache it in-process and refresh lazily when a
+// HS256 JWT issued by `POST /auth/login`. The token currently expires
+// after 7 days, so we cache it in-process and refresh lazily when a
 // request fails with 401 (or when the cached entry is within the refresh
 // skew window).
 //
@@ -36,12 +36,13 @@ struct LoginResponse {
 
 #[derive(Clone, Debug)]
 struct CachedToken {
+    base_url: String,
     token: String,
     /// Unix-epoch seconds at which the token was minted.
     minted_at: u64,
 }
 
-const TOKEN_TTL_SECS: u64 = 24 * 60 * 60;
+const TOKEN_TTL_SECS: u64 = 7 * 24 * 60 * 60;
 const TOKEN_REFRESH_SKEW_SECS: u64 = 60 * 10;
 
 static CACHED_TOKEN: parking_lot::Mutex<Option<CachedToken>> = parking_lot::Mutex::new(None);
@@ -57,6 +58,7 @@ static RUNTIME_BASE_URL: parking_lot::RwLock<Option<String>> = parking_lot::RwLo
 /// `None` to clear it.
 pub fn set_runtime_token(token: Option<String>) {
     *RUNTIME_TOKEN.write() = token.filter(|token| !token.is_empty());
+    *RUNTIME_LOGIN.write() = None;
     invalidate_gateway_token();
 }
 
@@ -67,12 +69,20 @@ pub fn set_runtime_login(email: Option<String>, password: Option<String>) {
         .zip(password)
         .filter(|(email, password)| !email.is_empty() && !password.is_empty());
     *RUNTIME_LOGIN.write() = credentials;
+    *RUNTIME_TOKEN.write() = None;
     invalidate_gateway_token();
 }
 
 /// Overrides the gateway worker base URL (e.g. a self-hosted deployment).
 pub fn set_runtime_base_url(url: Option<String>) {
-    *RUNTIME_BASE_URL.write() = url.filter(|url| !url.is_empty());
+    let url = url.filter(|url| !url.is_empty()).map(|url| url.trim_end_matches('/').to_string());
+    let mut current = RUNTIME_BASE_URL.write();
+    if *current != url {
+        *current = url;
+        *RUNTIME_TOKEN.write() = None;
+        *RUNTIME_LOGIN.write() = None;
+        invalidate_gateway_token();
+    }
 }
 
 /// The email of the account signed in through the settings UI, if any.
@@ -92,10 +102,11 @@ pub fn has_runtime_credentials() -> bool {
 /// caches the resulting JWT). Used by the settings-UI sign-in flow.
 pub async fn sign_in_with_password(
     client: &dyn HttpClient,
+    base: &str,
     email: &str,
     password: &str,
 ) -> Result<String> {
-    login_refresh(client, &worker_base_url(), email, password).await
+    login_refresh(client, base, email, password).await
 }
 
 fn now_secs() -> u64 {
@@ -120,15 +131,27 @@ pub fn worker_base_url() -> String {
 /// Returns a cached token if it is still valid (with a refresh skew), otherwise
 /// None. Caller should follow up with [`login_refresh`] when this returns
 /// None.
-fn cached_token_if_valid() -> Option<String> {
+fn cached_token_if_valid(base: &str) -> Option<String> {
     let guard = CACHED_TOKEN.lock();
     let cached = guard.as_ref()?;
+    if cached.base_url != base.trim_end_matches('/') {
+        return None;
+    }
     let age = now_secs().saturating_sub(cached.minted_at);
     if age + TOKEN_REFRESH_SKEW_SECS < TOKEN_TTL_SECS {
         Some(cached.token.clone())
     } else {
         None
     }
+}
+
+fn runtime_base_matches(base: &str) -> bool {
+    RUNTIME_BASE_URL
+        .read()
+        .as_deref()
+        .unwrap_or(GLM_API_URL)
+        .trim_end_matches('/')
+        == base.trim_end_matches('/')
 }
 
 /// Forces the next [`gateway_token`] call to re-login. Call this after
@@ -163,36 +186,40 @@ async fn login_refresh(
     );
     let parsed: LoginResponse = serde_json::from_str(&body).context("parse login response")?;
     let token = parsed.token;
-    *CACHED_TOKEN.lock() = Some(CachedToken { token: token.clone(), minted_at: now_secs() });
+    *CACHED_TOKEN.lock() = Some(CachedToken {
+        base_url: base.trim_end_matches('/').to_string(),
+        token: token.clone(),
+        minted_at: now_secs(),
+    });
     Ok(token)
 }
 
 /// Resolves the bearer token to send to the gateway worker at `base`.
 ///
 /// Resolution order:
-/// 1. For a custom/self-hosted base URL, `ZAGENT_GLM_API_KEY`. This prevents
-///    a cached cloud login from being sent to a local proxy.
-/// 2. Runtime credentials from the settings UI: account email + password →
+/// 1. Runtime credentials from the settings UI: account email + password →
 ///    auto-login + cache, otherwise the pre-issued token.
+/// 2. For a custom/local base URL, `ZAGENT_GLM_API_KEY`.
 /// 3. `ZAI_WORKER_EMAIL` + `ZAI_WORKER_PASSWORD` env vars → auto-login + cache.
-/// 4. `ZAGENT_GLM_API_KEY` (pre-issued bearer fallback for the default base).
-/// 5. Empty string (worker rejects with 401, caller decides).
+/// 4. `ZAGENT_GLM_API_KEY` fallback for the default base.
+/// 5. Empty string (server rejects with 401, caller decides).
 pub async fn gateway_token(client: &dyn HttpClient, base: &str) -> Result<String> {
     let env_token = std::env::var("ZAGENT_GLM_API_KEY").ok();
+    if runtime_base_matches(base) {
+        if let Some(token) = RUNTIME_TOKEN.read().clone() {
+            return Ok(token);
+        }
+        if let Some((email, password)) = RUNTIME_LOGIN.read().clone() {
+            if let Some(token) = cached_token_if_valid(base) {
+                return Ok(token);
+            }
+            return login_refresh(client, base, &email, &password).await;
+        }
+    }
+    if let Some(token) = cached_token_if_valid(base) {
+        return Ok(token);
+    }
     if let Some(token) = custom_gateway_bearer(base, env_token) {
-        return Ok(token);
-    }
-    // Fast path: a cached token from a prior login is still valid.
-    if let Some(token) = cached_token_if_valid() {
-        return Ok(token);
-    }
-    // Settings-UI credentials first.
-    let runtime_login = RUNTIME_LOGIN.read().clone();
-    if let Some((email, password)) = runtime_login {
-        return login_refresh(client, base, &email, &password).await;
-    }
-    let runtime_token = RUNTIME_TOKEN.read().clone();
-    if let Some(token) = runtime_token {
         return Ok(token);
     }
     // Environment-variable fallbacks for headless deployments.
@@ -206,6 +233,9 @@ pub async fn gateway_token(client: &dyn HttpClient, base: &str) -> Result<String
         _ => None,
     };
     if let Some((email, password)) = env_login {
+        if let Some(token) = cached_token_if_valid(base) {
+            return Ok(token);
+        }
         return login_refresh(client, base, &email, &password).await;
     }
     Ok(std::env::var("ZAGENT_GLM_API_KEY").unwrap_or_default())
@@ -828,7 +858,31 @@ pub async fn get_models(
 
 #[cfg(test)]
 mod tests {
-    use super::{GLM_API_URL, custom_gateway_bearer};
+    use super::{
+        CACHED_TOKEN, CachedToken, GLM_API_URL, cached_token_if_valid, custom_gateway_bearer,
+        has_runtime_credentials, now_secs, runtime_base_matches, set_runtime_base_url,
+        set_runtime_token,
+    };
+
+    #[test]
+    fn switching_endpoint_does_not_reuse_credentials_or_login_token() {
+        let cloud = "https://gateway.example";
+        let local = "http://127.0.0.1:3001";
+        set_runtime_base_url(Some(cloud.to_string()));
+        set_runtime_token(Some("cloud-secret".to_string()));
+        assert!(runtime_base_matches(cloud));
+        assert!(!runtime_base_matches(local));
+        set_runtime_base_url(Some(local.to_string()));
+        assert!(!has_runtime_credentials());
+        *CACHED_TOKEN.lock() = Some(CachedToken {
+            base_url: cloud.to_string(),
+            token: "cloud-jwt".to_string(),
+            minted_at: now_secs(),
+        });
+        assert!(cached_token_if_valid(local).is_none());
+        assert_eq!(cached_token_if_valid(cloud).as_deref(), Some("cloud-jwt"));
+        set_runtime_base_url(None);
+    }
 
     #[test]
     fn custom_gateway_prefers_explicit_bearer() {

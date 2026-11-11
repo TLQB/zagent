@@ -13,26 +13,31 @@ ported selectively instead of merged wholesale.
 
 ---
 
-### Z.AI gateway worker (built-in provider)
+### Z.AI cloud gateway and local proxy (built-in provider)
 
-Zagent ships a built-in `Zagent-GLM` language model provider that talks to a
-self-hosted [Cloudflare Worker gateway](https://github.com/TLQB/zai-proxy) exposing an
-OpenAI-compatible API (`/v1/models`, `/v1/chat/completions`). No local proxy, sidecar
-binary or Go toolchain is involved: the editor calls the worker directly.
+Zagent ships a built-in `Zagent-GLM` provider for the cloud gateway and the
+local `zagent-proxy`. Both expose `/v1/models` and `/v1/chat/completions`.
+The default URL is `https://zai-fly-gateway.tranlequybaotk12.workers.dev`.
+The model picker reads the selected endpoint's catalog and shows only the
+models that endpoint permits your account to use.
 
 Signing in (Settings, AI, LLM Providers, Zagent-GLM):
 
-- paste a pre-issued gateway **token**, or
-- enter the gateway account **email + password** — the editor logs in via
-  `POST /auth/login`, caches the 24h JWT and refreshes it automatically.
+- **Cloud:** enter your gateway account email and password. The editor obtains
+  a 7-day JWT via `POST /auth/login` and refreshes it automatically. You can
+  also paste a JWT into the token field.
+- **Local:** set `language_models.zagent.glm.api_url` to
+  `http://127.0.0.1:3001` and paste the local proxy's `AUTH_TOKEN` into the
+  token field. Use the base URL without a `/v1` suffix.
 
-Credentials are stored in the OS keychain and persist across restarts.
+Credentials are stored separately per endpoint in the OS keychain. Switching
+between cloud and local restores the credentials for that endpoint.
 
 Headless alternatives (env vars, first match wins):
 
 - `ZAI_WORKER_EMAIL` + `ZAI_WORKER_PASSWORD` — auto-login
 - `ZAGENT_GLM_API_KEY` — pre-issued bearer token
-- `ZAI_WORKER_URL` — override the gateway base URL
+- `ZAI_WORKER_URL` — choose the base URL when `api_url` is empty in settings
 
 ### Additional language model providers
 
@@ -41,7 +46,7 @@ each with its own model registry and streaming adapter:
 
 | Provider | Crate |
 | --- | --- |
-| GLM (via embedded proxy) | `crates/language_models/src/provider/glm.rs` |
+| GLM (cloud gateway or local proxy) | `crates/language_models/src/provider/glm.rs` |
 | JustWoker | `crates/language_models/src/provider/justwoker.rs` |
 | Kilo | `crates/language_models/src/provider/kilo.rs` |
 | NextRouter | `crates/language_models/src/provider/nextrouter.rs` |
